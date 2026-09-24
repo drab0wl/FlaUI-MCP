@@ -14,19 +14,22 @@ public class BatchTool : ToolBase
     private readonly SessionManager _sessionManager;
     private readonly ElementRegistry _elementRegistry;
     private readonly SnapshotBuilder _snapshotBuilder;
+    private readonly ClickExecutor _clickExecutor;
 
-    public BatchTool(SessionManager sessionManager, ElementRegistry elementRegistry)
+    public BatchTool(SessionManager sessionManager, ElementRegistry elementRegistry, ClickExecutor clickExecutor)
     {
         _sessionManager = sessionManager;
         _elementRegistry = elementRegistry;
         _snapshotBuilder = new SnapshotBuilder(elementRegistry);
+        _clickExecutor = clickExecutor;
     }
 
     public override string Name => "windows_batch";
 
     public override string Description => 
         "Execute multiple actions in a single call. Much faster than individual calls. " +
-        "Supports click, type, fill, and wait actions. Returns results for each action.";
+        "Supports click, type, fill, wait and snapshot actions. Returns results for each action. " +
+        "Stops early if a click opens a dialog or doesn't return, so later actions don't run against a blocked app.";
 
     public override object InputSchema => new
     {
@@ -58,6 +61,12 @@ public class BatchTool : ToolBase
                             type = "string",
                             description = "Text for type action"
                         },
+                        mode = new
+                        {
+                            type = "string",
+                            @enum = new[] { "auto", "invoke", "input" },
+                            description = "Click mode for click actions (see windows_click)"
+                        },
                         value = new
                         {
                             type = "string",
@@ -86,11 +95,11 @@ public class BatchTool : ToolBase
         required = new[] { "actions" }
     };
 
-    public override Task<McpToolResult> ExecuteAsync(JsonElement? arguments)
+    public override async Task<McpToolResult> ExecuteAsync(JsonElement? arguments)
     {
         if (arguments == null || !arguments.Value.TryGetProperty("actions", out var actionsElement))
         {
-            return Task.FromResult(ErrorResult("Missing required argument: actions"));
+            return ErrorResult("Missing required argument: actions");
         }
 
         var stopOnError = true;
@@ -107,9 +116,29 @@ public class BatchTool : ToolBase
             try
             {
                 var actionType = actionObj.GetProperty("action").GetString();
+                if (actionType == "click")
+                {
+                    var click = await ExecuteClickAsync(actionObj);
+                    results.Add($"{index + 1}. click: {click.Text}");
+                    if (click.DialogOpened || click.StillRunning)
+                    {
+                        if (index + 1 < actions.Count)
+                        {
+                            results.Add($"Stopped after action {index + 1}: a dialog opened or the click is still pending. " +
+                                        "Handle it, then continue with the remaining actions.");
+                        }
+                        break;
+                    }
+                    if (click.IsError && stopOnError)
+                    {
+                        results.Add($"Stopped at action {index + 1} due to error");
+                        break;
+                    }
+                    continue;
+                }
+
                 var result = actionType switch
                 {
-                    "click" => ExecuteClick(actionObj),
                     "type" => ExecuteType(actionObj),
                     "fill" => ExecuteFill(actionObj),
                     "wait" => ExecuteWait(actionObj),
@@ -129,43 +158,30 @@ public class BatchTool : ToolBase
             }
         }
 
-        return Task.FromResult(TextResult(string.Join("\n", results)));
+        return TextResult(string.Join("\n", results));
     }
 
-    private string ExecuteClick(JsonElement action)
+    private async Task<ClickResult> ExecuteClickAsync(JsonElement action)
     {
         var refId = action.TryGetProperty("ref", out var refProp) ? refProp.GetString() : null;
         if (string.IsNullOrEmpty(refId))
         {
-            return "Missing ref";
+            return new ClickResult("Missing ref", true, false, false);
         }
 
         var element = _elementRegistry.GetElement(refId);
         if (element == null)
         {
-            return $"Element not found: {refId}";
+            return new ClickResult($"Element not found: {refId}", true, false, false);
         }
 
-        var elementName = element.Properties.Name.ValueOrDefault ?? refId;
-
-        // Try Invoke pattern first
-        if (element.Patterns.Invoke.IsSupported)
+        var modeText = action.TryGetProperty("mode", out var modeProp) ? modeProp.GetString() : null;
+        if (!ClickTool.TryParseMode(modeText, out var mode))
         {
-            element.Patterns.Invoke.Pattern.Invoke();
-            return $"Invoked {elementName}";
+            return new ClickResult("mode must be one of: auto, invoke, input", true, false, false);
         }
 
-        // Try Toggle pattern
-        if (element.Patterns.Toggle.IsSupported)
-        {
-            element.Patterns.Toggle.Pattern.Toggle();
-            return $"Toggled {elementName}";
-        }
-
-        // Fall back to mouse click
-        var clickPoint = element.GetClickablePoint();
-        Mouse.Click(clickPoint);
-        return $"Clicked {elementName}";
+        return await _clickExecutor.ClickAsync(element, new ClickRequest(refId, mode));
     }
 
     private string ExecuteType(JsonElement action)

@@ -28,7 +28,7 @@ public class TextAndValueTests
         var tabRef = _fixture.FindRefByName(windowHandle, tabName);
         Assert.NotNull(tabRef);
 
-        var clickTool = new ClickTool(_fixture.Elements);
+        var clickTool = _fixture.CreateClickTool();
         await _fixture.CallTool(clickTool, new { @ref = tabRef });
 
         // Poll for the element to appear after tab switch

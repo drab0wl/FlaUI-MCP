@@ -9,9 +9,11 @@ public class ToolRegistry
 {
     private readonly Dictionary<string, ITool> _tools = new();
     private readonly TimeSpan _toolTimeout;
+    private readonly IToolResultAnnotator? _annotator;
 
-    public ToolRegistry(TimeSpan? toolTimeout = null)
+    public ToolRegistry(TimeSpan? toolTimeout = null, IToolResultAnnotator? annotator = null)
     {
+        _annotator = annotator;
         _toolTimeout = toolTimeout ?? TimeSpan.FromSeconds(30);
         if (_toolTimeout <= TimeSpan.Zero)
         {
@@ -30,6 +32,40 @@ public class ToolRegistry
     }
 
     public async Task<McpToolResult> ExecuteToolAsync(string name, JsonElement? arguments)
+    {
+        var result = await ExecuteCoreAsync(name, arguments);
+        return Annotate(name, result);
+    }
+
+    private McpToolResult Annotate(string name, McpToolResult result)
+    {
+        if (_annotator == null) return result;
+
+        string? footer;
+        try
+        {
+            footer = _annotator.GetFooter(name);
+        }
+        catch
+        {
+            return result;
+        }
+        if (string.IsNullOrEmpty(footer)) return result;
+
+        var content = new List<McpContent>(result.Content);
+        var first = content.FindIndex(c => c.Type == "text");
+        if (first >= 0)
+        {
+            content[first] = content[first] with { Text = $"{content[first].Text}\n\n{footer}" };
+        }
+        else
+        {
+            content.Add(new McpContent { Type = "text", Text = footer });
+        }
+        return result with { Content = content };
+    }
+
+    private async Task<McpToolResult> ExecuteCoreAsync(string name, JsonElement? arguments)
     {
         if (!_tools.TryGetValue(name, out var tool))
         {
@@ -63,7 +99,8 @@ public class ToolRegistry
                             Type = "text",
                             Text = $"Tool '{name}' timed out after {(int)_toolTimeout.TotalMilliseconds}ms. " +
                                    "A modal dialog or blocked UI Automation provider may still be running in the background. " +
-                                   "Dismiss the blocking UI and retry the request."
+                                   "Use windows_dialogs to find open dialogs, and windows_dialog (Win32) or " +
+                                   "windows_click with mode=input to dismiss them without UI Automation."
                         }
                     },
                     IsError = true
@@ -84,6 +121,15 @@ public class ToolRegistry
             };
         }
     }
+}
+
+/// <summary>
+/// Supplies a status block appended to every tool result (open dialogs, pending actions).
+/// </summary>
+public interface IToolResultAnnotator
+{
+    /// <returns>Text to append, or null for nothing.</returns>
+    string? GetFooter(string toolName);
 }
 
 /// <summary>

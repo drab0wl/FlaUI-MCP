@@ -112,6 +112,9 @@ Or using `dotnet run`:
 | `windows_focus` | Bring a window to foreground |
 | `windows_close` | Close a window |
 | `windows_batch` | Execute multiple actions in one call |
+| `windows_dialogs` | List open dialogs and pending clicks (Win32, works while UIA is blocked) |
+| `windows_dialog` | Read/press/type into/close a Win32 dialog without UI Automation |
+| `windows_wait` | Wait for a pending click to finish, or a dialog to open or close |
 
 `windows_screenshot` supports an optional `background: true` argument when a
 window `handle` is provided. This uses native background capture when available
@@ -184,6 +187,50 @@ Replace an existing screenshot file explicitly:
 - A timeout error means the MCP request returned, but a blocked Windows UI
   Automation provider or modal dialog may still need to be dismissed before
   retrying the operation.
+
+## Modal Dialogs
+
+UI Automation pattern calls are synchronous. When a click handler calls `ShowDialog()` or
+`MessageBox.Show()`, providers that run the handler inline (WinForms, Win32) don't return
+from `Invoke()` until the dialog closes. A naive client hangs.
+
+FlaUI-MCP handles this:
+
+- **Clicks never hang.** `windows_click` runs the UIA call on its own thread while a Win32
+  monitor (`EnumWindows`, filtered to the target process) watches for new dialogs. When one
+  appears, the tool returns immediately with the dialog's handle, and the click becomes a
+  pending operation that finishes when the dialog closes.
+- **Every result carries status.** Any tool's result ends with the open dialogs, pending
+  clicks, and clicks that finished since the last call, so the agent can't miss a dialog.
+- **Dialogs are ordinary windows.** Snapshot one with `windows_snapshot handle=w7` and act on
+  its refs like any other window.
+- **`mode=input` avoids the problem.** A real mouse click leaves no UIA call outstanding, so
+  the dialog's UIA tree is fully usable. It needs the window visible and an unlocked session.
+  The click is refused if another app covers the target point.
+- **A Win32 fallback for when UIA is blocked.** `windows_dialog` reads a classic dialog's
+  controls and presses buttons with window messages (`WM_COMMAND`/`BM_CLICK`,
+  `WM_SETTEXT`), so it works even while the app's provider is stuck. It handles MessageBox,
+  `#32770` dialogs and WinForms forms. WPF and task-dialog content has no child HWNDs, so
+  use `windows_snapshot` for those.
+
+```
+1. windows_click { "ref": "w1e12" }
+   → The click "Delete" (pattern) opened a dialog. The app is waiting for it, so the
+     click is pending as op1.
+     Dialog: w4 "Confirm Delete" [modal] [win32]
+2. windows_dialog { "handle": "w4" }
+   → - c1 text "Delete the selected item?"
+     - c2 button "&Yes" [default] id=6
+     - c3 button "&No" id=7
+3. windows_dialog { "handle": "w4", "action": "press", "button": "yes" }
+   → Pressed c2 "&Yes" in w4. The dialog closed.
+     --- status ---
+     Finished since last call:
+     - op1: click "Delete" (pattern) -> Invoked Delete
+```
+
+Set `FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS` (for example `5000`) to make UIA calls against a
+blocked provider fail after that long instead of the UIA default.
 
 ## How It Works
 

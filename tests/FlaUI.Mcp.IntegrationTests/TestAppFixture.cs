@@ -4,6 +4,8 @@ using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
 using PlaywrightWindows.Mcp;
 using PlaywrightWindows.Mcp.Core;
+using PlaywrightWindows.Mcp.Core.Actions;
+using PlaywrightWindows.Mcp.Core.Dialogs;
 using PlaywrightWindows.Mcp.Tools;
 
 namespace FlaUI.Mcp.IntegrationTests;
@@ -20,6 +22,16 @@ public class TestAppFixture : IAsyncLifetime
 
     public SessionManager Session { get; } = new();
     public ElementRegistry Elements { get; } = new();
+    public DialogMonitor Dialogs { get; } = new();
+    public PendingOperationRegistry Pending { get; } = new();
+    public ClickExecutor Clicks { get; }
+
+    public TestAppFixture()
+    {
+        Clicks = new ClickExecutor(Session, Dialogs, new ActionRunner(Pending), Pending);
+    }
+
+    public ClickTool CreateClickTool() => new(Elements, Clicks);
 
     public string WinFormsHandle { get; private set; } = "";
     public string WpfHandle { get; private set; } = "";
@@ -109,6 +121,26 @@ public class TestAppFixture : IAsyncLifetime
         };
 
         return searchPaths.FirstOrDefault(File.Exists);
+    }
+
+    /// <summary>
+    /// Close any dialogs a failed test left open in the test apps, so later tests start clean.
+    /// </summary>
+    public void DismissDialogs()
+    {
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            var open = Dialogs.GetDialogs(Session.TrackedProcessIds);
+            if (open.Count == 0) return;
+            foreach (var d in open)
+            {
+                var controls = NativeDialog.ReadControls(d.Hwnd);
+                var button = NativeDialog.FindButton(controls, "cancel") ?? NativeDialog.FindButton(controls, "no");
+                if (button != null) NativeDialog.Press(button);
+                else NativeDialog.RequestClose(d.Hwnd);
+            }
+            Thread.Sleep(300);
+        }
     }
 
     public Window? GetWinFormsWindow() => Session.GetWindow(WinFormsHandle);

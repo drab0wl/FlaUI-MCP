@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Modal dialog handling. `windows_click` no longer hangs when a click opens a modal dialog: the UIA call runs on its own thread while a Win32 monitor watches the target process for new dialogs. The click returns as soon as a dialog appears, with the dialog's window handle, and becomes a pending operation (`op1`, ...) that finishes when the dialog closes.
+- `windows_click` `mode`: `auto` (default), `invoke` (UIA patterns only), `input` (real mouse click at the element's clickable point, bringing its window forward first and refusing if another app covers the point). `mode` is also accepted by `windows_batch` click actions.
+- Every tool result ends with a status block listing open modal/Win32 dialogs in the apps being automated, pending clicks, and clicks that finished since the last call.
+- `windows_dialogs`: list dialogs (Win32 only, works while UIA is blocked).
+- `windows_dialog`: read, press buttons, set edit text, or close HWND-based dialogs (MessageBox, `#32770`, WinForms) with window messages, bypassing UI Automation.
+- `windows_wait`: wait for a pending click to finish, a dialog to open, or a dialog to close.
+- `FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS` environment variable to cap UIA call time.
+- Test apps: MessageBox and input-bearing modal dialogs (WinForms and WPF); `ModalDialogTests` integration tests; unit tests for dialog classification, the action runner, the status block and Win32 button matching.
+
+### Changed
+- `windows_batch` stops after a click that opens a dialog or doesn't return, instead of running later actions against a blocked app.
+- `windows_snapshot` fails fast with guidance, rather than timing out, when a pending click is holding the app's UIA provider.
+- `windows_screenshot` with a window handle captures the window's screen rectangle from its HWND, so it works while UIA is blocked.
+- Window handles are stable: registering the same window again returns the same handle.
+
 ## [0.2.0] - 2026-07-08
 
 ### Fixed

@@ -72,7 +72,7 @@ public class SnapshotTests
         var tabRef = TestAppFixture.FindRefInSnapshot(snapshot, "Buttons");
         if (tabRef != null)
         {
-            var clickTool = new ClickTool(_fixture.Elements);
+            var clickTool = _fixture.CreateClickTool();
             await _fixture.CallTool(clickTool, new { @ref = tabRef });
             await Task.Delay(100);
         }
@@ -91,7 +91,7 @@ public class SnapshotTests
 
         Assert.NotNull(gridTabRef);
 
-        var clickTool = new ClickTool(_fixture.Elements);
+        var clickTool = _fixture.CreateClickTool();
         await _fixture.CallTool(clickTool, new { @ref = gridTabRef });
 
         // Poll for grid content to appear after tab switch

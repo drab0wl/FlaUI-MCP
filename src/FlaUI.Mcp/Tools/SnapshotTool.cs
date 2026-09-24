@@ -1,6 +1,8 @@
 using System.Text.Json;
 using FlaUI.Core.AutomationElements;
 using PlaywrightWindows.Mcp.Core;
+using PlaywrightWindows.Mcp.Core.Actions;
+using PlaywrightWindows.Mcp.Core.Win32;
 
 namespace PlaywrightWindows.Mcp.Tools;
 
@@ -12,12 +14,14 @@ public class SnapshotTool : ToolBase
     private readonly SessionManager _sessionManager;
     private readonly ElementRegistry _elementRegistry;
     private readonly SnapshotBuilder _snapshotBuilder;
+    private readonly PendingOperationRegistry? _pending;
 
-    public SnapshotTool(SessionManager sessionManager, ElementRegistry elementRegistry)
+    public SnapshotTool(SessionManager sessionManager, ElementRegistry elementRegistry, PendingOperationRegistry? pending = null)
     {
         _sessionManager = sessionManager;
         _elementRegistry = elementRegistry;
         _snapshotBuilder = new SnapshotBuilder(elementRegistry);
+        _pending = pending;
     }
 
     public override string Name => "windows_snapshot";
@@ -50,6 +54,12 @@ public class SnapshotTool : ToolBase
 
             if (!string.IsNullOrEmpty(handle))
             {
+                var blocked = CheckBlocked(handle);
+                if (blocked != null)
+                {
+                    return Task.FromResult(ErrorResult(blocked));
+                }
+
                 window = _sessionManager.GetWindow(handle);
                 if (window == null)
                 {
@@ -93,5 +103,30 @@ public class SnapshotTool : ToolBase
         {
             return Task.FromResult(ErrorResult($"Failed to capture snapshot: {ex.Message}"));
         }
+    }
+
+    /// <summary>
+    /// When a click in this app is still pending (usually stuck behind a modal dialog), check
+    /// that UI Automation answers before walking the tree, so a blocked provider costs 1.5s
+    /// instead of the full tool timeout.
+    /// </summary>
+    private string? CheckBlocked(string handle)
+    {
+        if (_pending == null) return null;
+        var hwnd = _sessionManager.GetHwnd(handle);
+        if (hwnd == 0) return null;
+        var pid = NativeMethods.GetProcessId(hwnd);
+        if (!_pending.HasRunningFor(pid)) return null;
+
+        var answered = Responsiveness.Probe(() =>
+        {
+            var w = _sessionManager.GetWindow(handle);
+            _ = w?.Properties.Name.ValueOrDefault;
+        }, TimeSpan.FromMilliseconds(1500));
+
+        return answered ? null
+            : $"UI Automation for {handle} is not answering: a pending click is holding the app's provider. " +
+              $"Use windows_dialog handle={handle} to read and press buttons with Win32 messages, " +
+              "or windows_screenshot to see it.";
     }
 }
