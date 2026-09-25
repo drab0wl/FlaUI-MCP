@@ -137,11 +137,7 @@ public class FillTool : ToolBase
                 type = "string",
                 description = "Value to fill"
             },
-            postSnapshot = new
-            {
-                type = "boolean",
-                description = "Append a snapshot of the app's foreground window (default: true)"
-            }
+            postSnapshot = new { type = new[] { "boolean", "string" }, description = PostActionModes.SchemaDescription }
         },
         required = new[] { "ref", "value" }
     };
@@ -202,7 +198,7 @@ public class FillTool : ToolBase
 
     private string WithPostSnapshot(string text, JsonElement? arguments, string refId, FlaUI.Core.AutomationElements.AutomationElement element)
     {
-        if (_post == null || !_post.IsEnabled(GetArgument<bool?>(arguments, "postSnapshot"))) return text;
-        return PostActionSnapshotter.Append(text, _post.CaptureAfter("fill", refId, element));
+        if (_post == null || _post.ModeFor(arguments) == PostActionMode.Off) return text;
+        return PostActionSnapshotter.Append(text, _post.CaptureAfter("fill", refId, element, _post.ModeFor(arguments)));
     }
 }

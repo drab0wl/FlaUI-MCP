@@ -13,11 +13,12 @@ public static class ServerInstructions
         - Start with windows_launch or windows_list_windows to get a window handle (w1).
         - Look: windows_find for specific elements; windows_snapshot for an overview (compact=true on big windows). Refs like w1e5 stay valid across snapshots.
         - Act: windows_click; windows_set for checkboxes, options, sliders and tree items (no-op if already set); windows_menu for menu commands; windows_fill / windows_type for text; windows_read_table for grids.
-        - Action results end with what changed in the window, so don't snapshot again just to check.
+        - Action results end with what changed in the window (just a summary the first time), so don't snapshot again just to check.
         - For several steps use one windows_batch call, targeting elements by name/automationId/role instead of refs. After a step that opens a dialog, add {"action":"wait","until":"dialog_open"}.
         - Calls never hang on dialogs: the result gives the dialog's handle. If UI Automation is blocked, use windows_dialog.
         - A name that matches nothing lists the closest names: retry with one instead of taking a snapshot.
         - Keys only go to the automated app when it's in the foreground.
+        - windows_screenshot output=file saves the PNG and returns its path instead of image data.
         """;
 
     /// <summary>The instructions to send, or null for none.</summary>

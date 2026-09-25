@@ -63,11 +63,7 @@ public class ClickTool : ToolBase
                 type = "integer",
                 description = "After the click returns, how long to keep watching for a dialog (default: 250). 0 for clicks known not to open dialogs."
             },
-            postSnapshot = new
-            {
-                type = "boolean",
-                description = "Append a snapshot of the dialog the click opened or the app's foreground window (default: true)"
-            }
+            postSnapshot = new { type = new[] { "boolean", "string" }, description = PostActionModes.SchemaDescription }
         },
         required = new[] { "ref" }
     };
@@ -114,11 +110,11 @@ public class ClickTool : ToolBase
         {
             var result = await _executor.ClickAsync(element, request);
             var text = result.Text;
-            if (_post != null && _post.IsEnabled(GetArgument<bool?>(arguments, "postSnapshot"))
+            if (_post != null && _post.ModeFor(arguments) != PostActionMode.Off
                 && (!result.IsError || result.DialogOpened))
             {
                 text = PostActionSnapshotter.Append(text, _post.Capture(
-                    new PostActionContext("click", result.ProcessId, result.WindowHwnd, result.NewDialogs)));
+                    new PostActionContext("click", result.ProcessId, result.WindowHwnd, result.NewDialogs), _post.ModeFor(arguments)));
             }
             return result.IsError ? ErrorResult(text) : TextResult(text);
         }

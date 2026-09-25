@@ -21,9 +21,10 @@ public class ScreenshotTool : ToolBase
 
     public override string Name => "windows_screenshot";
 
-    public override string Description => 
-        
-        "PNG of a window or element, for when the accessibility tree doesn't show what you need.";
+    public override string Description =>
+        "PNG of a window or element, for when the accessibility tree doesn't show what you need. " +
+        "output=file saves it and returns just the path; output=preview also returns a small JPEG; " +
+        "the default returns the full PNG inline.";
 
     public override object InputSchema => new
     {
@@ -59,6 +60,14 @@ public class ScreenshotTool : ToolBase
             {
                 type = "boolean",
                 description = "Allow savePath to replace an existing file (default: false)"
+            },
+            output = new
+            {
+                type = "string",
+                @enum = new[] { "image", "file", "preview" },
+                description = $"image: the PNG inline. file: save it (to savePath, else a temp file) and return the path. " +
+                              $"preview: save it and return the path plus a JPEG at most {ScreenshotOutputs.PreviewMaxSide}px. " +
+                              "Default: image"
             }
         }
     };
@@ -71,6 +80,16 @@ public class ScreenshotTool : ToolBase
         var background = GetBoolArgument(arguments, "background", false);
         var savePath = GetStringArgument(arguments, "savePath");
         var overwrite = GetBoolArgument(arguments, "overwrite", false);
+        var outputText = GetStringArgument(arguments, "output");
+        var output = ScreenshotOutputs.Default;
+        if (outputText != null)
+        {
+            if (ScreenshotOutputs.Parse(outputText) is not { } parsed)
+            {
+                return Task.FromResult(ErrorResult("output must be image, file or preview"));
+            }
+            output = parsed;
+        }
 
         if (!TryNormalizeSavePath(savePath, overwrite, out var normalizedSavePath, out var pathError))
         {
@@ -116,7 +135,7 @@ public class ScreenshotTool : ToolBase
 
                 if (background && NativeWindowCapture.TryCaptureWindow(window, out var backgroundImage, out _))
                 {
-                    return Task.FromResult(BuildScreenshotResult(backgroundImage, normalizedSavePath, overwrite));
+                    return Task.FromResult(BuildScreenshotResult(backgroundImage, normalizedSavePath, overwrite, output, handle));
                 }
 
                 capture = Capture.Element(window);
@@ -153,7 +172,7 @@ public class ScreenshotTool : ToolBase
                 imageData = stream.ToArray();
             }
 
-            return Task.FromResult(BuildScreenshotResult(imageData, normalizedSavePath, overwrite));
+            return Task.FromResult(BuildScreenshotResult(imageData, normalizedSavePath, overwrite, output, refId ?? handle));
         }
         catch (Exception ex)
         {
@@ -222,12 +241,13 @@ public class ScreenshotTool : ToolBase
         return bounds.Width > 0 && bounds.Height > 0;
     }
 
-    private static McpToolResult BuildScreenshotResult(byte[] imageData, string? savePath, bool overwrite)
+    private static McpToolResult BuildScreenshotResult(byte[] imageData, string? savePath, bool overwrite, ScreenshotOutput output, string? label)
     {
-        if (string.IsNullOrEmpty(savePath))
+        if (output == ScreenshotOutput.Image && string.IsNullOrEmpty(savePath))
         {
             return ImageResult(imageData, "image/png");
         }
+        savePath ??= ScreenshotOutputs.DefaultPath(Path.GetTempPath(), DateTime.Now, label);
 
         try
         {
@@ -256,13 +276,45 @@ public class ScreenshotTool : ToolBase
             return ErrorResult($"Failed to save screenshot to {savePath}: {ex.Message}");
         }
 
-        return new McpToolResult
+        if (output == ScreenshotOutput.Image)
         {
-            Content = new List<McpContent>
+            return new McpToolResult
             {
-                new() { Type = "text", Text = $"Screenshot saved to {savePath}" },
-                new() { Type = "image", Data = Convert.ToBase64String(imageData), MimeType = "image/png" }
-            }
-        };
+                Content = new List<McpContent>
+                {
+                    new() { Type = "text", Text = $"Screenshot saved to {savePath}" },
+                    new() { Type = "image", Data = Convert.ToBase64String(imageData), MimeType = "image/png" }
+                }
+            };
+        }
+
+        using var bitmap = new System.Drawing.Bitmap(new MemoryStream(imageData));
+        var text = $"Screenshot saved to {savePath} ({bitmap.Width}x{bitmap.Height}, {imageData.Length / 1024} KB)";
+        var content = new List<McpContent> { new() { Type = "text", Text = text } };
+        if (output == ScreenshotOutput.Preview)
+        {
+            content.Add(new McpContent { Type = "image", Data = Convert.ToBase64String(Preview(bitmap)), MimeType = "image/jpeg" });
+        }
+        return new McpToolResult { Content = content };
+    }
+
+    /// <summary>A downscaled JPEG, small enough to pass inline.</summary>
+    private static byte[] Preview(System.Drawing.Bitmap source)
+    {
+        var (width, height) = ScreenshotOutputs.PreviewSize(source.Width, source.Height);
+        using var scaled = new System.Drawing.Bitmap(width, height);
+        using (var g = System.Drawing.Graphics.FromImage(scaled))
+        {
+            g.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+            g.DrawImage(source, 0, 0, width, height);
+        }
+
+        var jpeg = System.Drawing.Imaging.ImageCodecInfo.GetImageEncoders()
+            .First(e => e.FormatID == System.Drawing.Imaging.ImageFormat.Jpeg.Guid);
+        using var parameters = new System.Drawing.Imaging.EncoderParameters(1);
+        parameters.Param[0] = new System.Drawing.Imaging.EncoderParameter(System.Drawing.Imaging.Encoder.Quality, 75L);
+        using var stream = new MemoryStream();
+        scaled.Save(stream, jpeg, parameters);
+        return stream.ToArray();
     }
 }
