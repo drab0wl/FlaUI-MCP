@@ -47,6 +47,26 @@ Agent: Calculate 3 × 3
      5. snapshot: ... "Display is 9" ...
 ```
 
+Refs aren't required: `windows_batch` can find elements itself, so a flow can run without
+a snapshot first, and action results end with a snapshot of what the app shows next:
+
+```
+windows_batch { "actions": [
+  {"action": "click", "name": "Three", "role": "button", "handle": "w1", "noDialog": true},
+  {"action": "click", "name": "Multiply by", "handle": "w1", "noDialog": true},
+  {"action": "click", "name": "Three", "role": "button", "handle": "w1", "noDialog": true},
+  {"action": "click", "name": "Equals", "handle": "w1", "noDialog": true},
+  {"action": "wait", "until": "text_contains", "nameContains": "Display is", "handle": "w1", "text": "9"}
+]}
+→ 1. click: button "Three" in w1 -> w1e43: Invoked Three
+  ...
+  5. wait: name*="Display is" in w1 (w1e15) text contains "9"
+
+  --- after batch: foreground window w1 "Calculator" ---
+  - window "Calculator" [ref=w1e1]
+    ...
+```
+
 ## Installation
 
 ### Prerequisites
@@ -101,19 +121,19 @@ Or using `dotnet run`:
 | Tool | Description |
 |------|-------------|
 | `windows_launch` | Launch a Windows application |
-| `windows_snapshot` | Get accessibility tree with element refs |
-| `windows_click` | Click an element by ref |
+| `windows_snapshot` | Get accessibility tree with element refs (refs stay the same across snapshots for unchanged elements) |
+| `windows_click` | Click an element by ref; never hangs on a modal dialog; result includes a snapshot of what opened |
 | `windows_type` | Type text into an element |
 | `windows_send_keys` | Send key presses or key chords (for example `Ctrl+A`) |
-| `windows_fill` | Clear and fill a text field |
+| `windows_fill` | Clear and fill a text field; result includes a snapshot of the app |
 | `windows_get_text` | Get text content of an element |
 | `windows_screenshot` | Capture window/element as PNG |
 | `windows_list_windows` | List all open windows |
 | `windows_focus` | Bring a window to foreground |
 | `windows_close` | Close a window |
-| `windows_batch` | Execute multiple actions in one call |
+| `windows_batch` | Execute multiple actions in one call: refs or selectors, condition waits, dialog actions |
 | `windows_dialogs` | List open dialogs and pending clicks (Win32, works while UIA is blocked) |
-| `windows_dialog` | Read/press/type into/close a Win32 dialog without UI Automation |
+| `windows_dialog` | Read/press/type into/close a Win32 dialog without UI Automation; press results include a snapshot of what the app shows next |
 | `windows_wait` | Wait for a pending click to finish, or a dialog to open or close |
 
 `windows_screenshot` supports an optional `background: true` argument when a
@@ -171,6 +191,45 @@ Replace an existing screenshot file explicitly:
   "overwrite": true
 }
 ```
+
+Run a whole dialog flow in one `windows_batch` call. Each action targets a `ref` or a
+selector: `name`, `nameContains`, `automationId`, `role` (as snapshots print it), plus
+`handle` for the window to search and `index` when several elements match:
+
+```json
+{
+  "actions": [
+    { "action": "click", "name": "Delete", "role": "button", "handle": "w1" },
+    { "action": "wait", "until": "dialog_open" },
+    { "action": "dialog_press", "button": "yes" },
+    { "action": "wait", "until": "text_contains", "automationId": "StatusLabel", "handle": "w1", "text": "Deleted" }
+  ]
+}
+```
+
+| Batch action | Fields |
+|--------------|--------|
+| `click` | `ref` or selector; `mode` (`auto`/`invoke`/`input`); `noDialog: true` or `settleMs` to skip/shorten the 250 ms dialog watch |
+| `type` | `text`; optional `ref` or selector to focus first |
+| `fill` | `ref` or selector; `value` |
+| `wait` | `ms`, or `until` + `timeoutMs` (default 5000): `dialog_open`, `dialog_closed` (`handle`, default the last dialog), `element` / `element_gone` (selector), `text_contains` (selector + `text`, case-insensitive) |
+| `snapshot` | optional `handle` |
+| `dialog_press` | `button` (text, `c3` ref, or `ok`/`cancel`/`yes`/`no`/...); optional `handle` (default the last dialog) |
+| `dialog_set_text` | `text`; optional `control` (`c4`, default the first edit box) and `handle` |
+
+`handle: "$dialog"` in a selector means the dialog the batch last saw open. A click that opens
+a dialog stops the batch unless the next action is `wait` with `until: "dialog_open"`. A batch
+has a 24-second budget; if it runs out, the result says which action to continue from.
+
+### Configuration
+
+| Environment variable | Effect |
+|----------------------|--------|
+| `FLAUI_MCP_POST_SNAPSHOT` | `0` to leave the post-action snapshot off unless a call asks for it (`postSnapshot: true`) |
+| `FLAUI_MCP_POST_SNAPSHOT_MAX_NODES` / `_MAX_CHARS` | Bounds for the post-action snapshot (default 150 elements / 8000 characters) |
+| `FLAUI_MCP_SNAPSHOT_MODE` | `cached` (default), `subtree`, or `live` (the original per-property reads) |
+| `FLAUI_MCP_TIMING` | `0` to turn off the `[timing]` lines on stderr |
+| `FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS` | Make UIA calls against a blocked provider fail after this long |
 
 ### Safety and Limitations
 
@@ -355,8 +414,9 @@ dotnet test tests\FlaUI.Mcp.IntegrationTests
 ┌─────────────────────────────────────────────────────────────────┐
 │  FlaUI-MCP Server (.NET 8)                                      │
 │  - Implements MCP tool handlers                                 │
-│  - Builds agent-friendly accessibility snapshots                │
-│  - Maps element refs ↔ AutomationElements                       │
+│  - Builds agent-friendly accessibility snapshots (CacheRequest) │
+│  - Maps element refs ↔ AutomationElements (stable across calls) │
+│  - Finds elements by selector; watches for dialogs with Win32   │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼
