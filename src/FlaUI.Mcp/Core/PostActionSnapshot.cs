@@ -40,16 +40,19 @@ public sealed class PostActionSnapshotter
 
     public PostActionOptions Options { get; }
 
-    /// <summary>The tool argument wins; otherwise the server default.</summary>
-    public bool IsEnabled(bool? requested) => requested ?? Options.Enabled;
+    /// <summary>The tool's postSnapshot argument, else the server default.</summary>
+    public PostActionMode ModeFor(System.Text.Json.JsonElement? arguments) =>
+        PostActionModes.FromArgument(arguments, Options.Mode);
 
     /// <returns>The section to append, or null when there's nothing useful to show.</returns>
-    public string? Capture(PostActionContext context)
+    public string? Capture(PostActionContext context, PostActionMode? mode = null)
     {
+        var effective = mode ?? Options.Mode;
+        if (effective == PostActionMode.Off) return null;
         var sw = Stopwatch.StartNew();
         try
         {
-            return CaptureCore(context);
+            return CaptureCore(context, effective);
         }
         catch (Exception ex)
         {
@@ -61,7 +64,7 @@ public sealed class PostActionSnapshotter
         }
     }
 
-    private string? CaptureCore(PostActionContext context)
+    private string? CaptureCore(PostActionContext context, PostActionMode mode)
     {
         var pid = context.ProcessId;
         var pids = pid != 0 ? new HashSet<int> { pid } : null;
@@ -106,34 +109,52 @@ public sealed class PostActionSnapshotter
             MaxNodes = Math.Max(Options.WalkMaxNodes, Options.MaxNodes),
             DeadlineUtc = DateTime.UtcNow + Options.TimeBudget,
         });
-        var full = SnapshotText.CompactText(result.Text, Options.MaxNodes, Options.MaxChars).TrimEnd();
+        // A new dialog's first snapshot stays small in Changes mode: you act on it next.
+        var (maxNodes, maxChars) = mode == PostActionMode.Changes && target.Kind == PostActionTargetKind.NewDialog
+            ? (Options.DialogMaxNodes, Options.DialogMaxChars)
+            : (Options.MaxNodes, Options.MaxChars);
+        var full = SnapshotText.CompactText(result.Text, maxNodes, maxChars).TrimEnd();
 
-        if (Options.Diff && previous is { Complete: true } && !result.Truncated)
+        var comparable = previous is { Complete: true } && !result.Truncated;
+        SnapshotDiff? diff = null;
+        var changes = "";
+        if (comparable)
         {
-            var diff = SnapshotDiff.Compute(ParsedSnapshot.Parse(previous.Text), ParsedSnapshot.Parse(result.Text));
-            var changes = diff.Render(Options.MaxChars).TrimEnd();
-            // A list of changes, unless the window changed so much that the snapshot is shorter.
-            if (changes.Length < full.Length)
-            {
-                var detail = diff.IsEmpty ? $"unchanged, {diff.Unchanged} elements" : $"changes: {diff.Summary}";
+            diff = SnapshotDiff.Compute(ParsedSnapshot.Parse(previous!.Text), ParsedSnapshot.Parse(result.Text));
+            changes = diff.Render(mode == PostActionMode.Changes ? Options.ChangesMaxChars : Options.MaxChars).TrimEnd();
+        }
+
+        switch (PostActionModes.Choose(mode, target.Kind, comparable, changes.Length, full.Length))
+        {
+            case PostActionView.Changes:
+                var detail = diff!.IsEmpty ? $"unchanged, {diff.Unchanged} elements" : $"changes: {diff.Summary}";
                 var diffHeader = PostActionTargeting.Header(context.Action, handle, title, target.Kind, detail);
                 return changes.Length == 0 ? diffHeader : $"{diffHeader}\n{changes}";
-            }
+
+            case PostActionView.Summary:
+                // Nothing to compare with yet. This read is now the baseline, so the next action
+                // in this window reports changes.
+                var summary = result.Truncated
+                    ? $"{result.Nodes}+ elements, too many to compare in time; use windows_find to look for what you need"
+                    : $"first look, {result.Nodes} elements; use windows_find or windows_snapshot compact=true to read it";
+                return PostActionTargeting.Header(context.Action, handle, title, target.Kind, summary);
+
+            default:
+                return $"{header}\n{full}";
         }
-        return $"{header}\n{full}";
     }
 
     private string Bound(string text) =>
         text.Length <= Options.MaxChars ? text : text[..Options.MaxChars] + "\n... (truncated)";
 
     /// <summary>Capture after acting on an element known by ref.</summary>
-    public string? CaptureAfter(string action, string refId, FlaUI.Core.AutomationElements.AutomationElement element)
+    public string? CaptureAfter(string action, string refId, FlaUI.Core.AutomationElements.AutomationElement element, PostActionMode? mode = null)
     {
         var pid = 0;
         try { pid = element.Properties.ProcessId.ValueOrDefault; } catch { }
         var hwnd = ElementRegistry.WindowHandleOf(refId) is { } handle ? _sessions.GetHwnd(handle) : 0;
         if (pid == 0 && hwnd != 0) pid = NativeMethods.GetProcessId(hwnd);
-        return Capture(new PostActionContext(action, pid, hwnd, Array.Empty<DialogInfo>()));
+        return Capture(new PostActionContext(action, pid, hwnd, Array.Empty<DialogInfo>()), mode);
     }
 
     /// <summary>Appends the post-action section to a result text.</summary>

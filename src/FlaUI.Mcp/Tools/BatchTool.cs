@@ -194,11 +194,7 @@ public class BatchTool : ToolBase
                 type = "boolean",
                 description = "Stop executing if an action fails (default: true)"
             },
-            postSnapshot = new
-            {
-                type = "boolean",
-                description = "Append a snapshot of the window shown after the last action (default: true)"
-            }
+            postSnapshot = new { type = new[] { "boolean", "string" }, description = PostActionModes.SchemaDescription }
         },
         required = new[] { "actions" }
     };
@@ -281,9 +277,9 @@ public class BatchTool : ToolBase
 
         var text = string.Join("\n", results);
         if (_post != null && !lastWasSnapshot && run.LastAction != null
-            && _post.IsEnabled(GetArgument<bool?>(arguments, "postSnapshot")))
+            && _post.ModeFor(arguments) != PostActionMode.Off)
         {
-            text = PostActionSnapshotter.Append(text, _post.Capture(run.LastAction));
+            text = PostActionSnapshotter.Append(text, _post.Capture(run.LastAction, _post.ModeFor(arguments)));
         }
         return TextResult(text);
     }

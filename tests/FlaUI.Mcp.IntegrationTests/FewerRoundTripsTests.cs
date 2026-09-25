@@ -138,4 +138,30 @@ public class FewerRoundTripsTests
         _output.WriteLine(result);
         Assert.Contains("Unsupported key: Hyper", result);
     }
+
+    [Theory]
+    [InlineData("file")]
+    [InlineData("preview")]
+    public async Task Screenshot_ToAFile_ReturnsThePath(string output)
+    {
+        var tool = new ScreenshotTool(_fixture.Session, _fixture.Elements);
+        var args = System.Text.Json.JsonSerializer.SerializeToElement(new { handle = _fixture.WinFormsHandle, output });
+        var result = await tool.ExecuteAsync(args);
+        var text = result.Content[0].Text!;
+        _output.WriteLine(text);
+
+        var match = Regex.Match(text, @"Screenshot saved to (.+\.png) \((\d+)x(\d+)");
+        Assert.True(match.Success, text);
+        Assert.True(File.Exists(match.Groups[1].Value));
+        if (output == "file")
+        {
+            Assert.Single(result.Content);
+        }
+        else
+        {
+            Assert.Equal("image/jpeg", result.Content[1].MimeType);
+            Assert.NotEmpty(Convert.FromBase64String(result.Content[1].Data!));
+        }
+        File.Delete(match.Groups[1].Value);
+    }
 }

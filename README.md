@@ -62,9 +62,9 @@ windows_batch { "actions": [
   ...
   5. wait: name*="Display is" in w1 (w1e15) text contains "9"
 
-  --- after batch: foreground window w1 "Calculator" ---
-  - window "Calculator" [ref=w1e1]
-    ...
+  --- after batch: foreground window w1 "Calculator" (changes: 0 added, 0 removed, 1 changed) ---
+  changed:
+    - text "Display is 9" [ref=w1e15]  (was: text "Display is 3" [ref=w1e15])
 ```
 
 ## Installation
@@ -177,6 +177,14 @@ Capture a window using opt-in background capture:
 }
 ```
 
+Save a screenshot and get back only its path (for clients that truncate inline images), or the
+path plus a small JPEG preview:
+
+```json
+{ "handle": "w1", "output": "file" }
+{ "handle": "w1", "output": "preview" }
+```
+
 Save a screenshot to disk without replacing existing files:
 
 ```json
@@ -235,12 +243,12 @@ has a 24-second budget; if it runs out, the result says which action to continue
 
 | Environment variable | Effect |
 |----------------------|--------|
-| `FLAUI_MCP_POST_SNAPSHOT` | `0` to leave the post-action snapshot off unless a call asks for it (`postSnapshot: true`) |
+| `FLAUI_MCP_POST_SNAPSHOT` | `changes` (default), `full` (a capped snapshot when there's nothing to compare), or `off` |
 | `FLAUI_MCP_POST_SNAPSHOT_MAX_NODES` / `_MAX_CHARS` | Bounds for the post-action snapshot (default 150 elements / 8000 characters) |
-| `FLAUI_MCP_POST_SNAPSHOT_DIFF` | `0` to always show a snapshot after actions, never a list of changes |
 | `FLAUI_MCP_SNAPSHOT_COMPACT` | `1` to make `compact: true` the default for `windows_snapshot` |
 | `FLAUI_MCP_SNAPSHOT_MODE` | `cached` (default), `subtree`, or `live` (the original per-property reads) |
 | `FLAUI_MCP_TIMING` | `0` to turn off the `[timing]` lines on stderr |
+| `FLAUI_MCP_SCREENSHOT_OUTPUT` | Default for `windows_screenshot` `output`: `image` (default), `file` or `preview` |
 | `FLAUI_MCP_INSTRUCTIONS` | `off` to send no server instructions, or a path to a text file to send instead of the built-in ones |
 | `FLAUI_MCP_KEYBOARD_GUARD` | `0` to let keyboard input go to whatever window is in the foreground |
 | `FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS` | Make UIA calls against a blocked provider fail after this long |
@@ -326,9 +334,12 @@ the number of calls:
     - button "Next" [ref=w1e22]  (was: button "Next" [ref=w1e22] [disabled])
   ```
 
-  Otherwise (a new dialog, or a window never snapshotted) you get a compact snapshot, capped at
-  150 elements / 8000 characters. Refs from earlier snapshots stay valid either way. Pass
-  `postSnapshot: false` to skip it; set `FLAUI_MCP_POST_SNAPSHOT=0` to make that the default.
+  The first time a window is seen there's nothing to compare with, so you get a one-line summary
+  (`first look, 812 elements; use windows_find ...`) and the window is recorded; the next action
+  there reports changes. A dialog the action opened gets a small snapshot (60 elements), since
+  it's usually what you act on next. Refs from earlier snapshots stay valid either way.
+  `postSnapshot: "full"` (or `FLAUI_MCP_POST_SNAPSHOT=full`) shows a capped snapshot instead of
+  the summary; `postSnapshot: false` (or `FLAUI_MCP_POST_SNAPSHOT=off`) turns it off.
   While a pending click blocks the app's UI Automation, you get the dialog's Win32 controls.
 - **Search instead of reading.** On big windows (IDEs, Office) a full snapshot is thousands of
   lines. `windows_find` returns just the matches, each with the named elements it's inside:

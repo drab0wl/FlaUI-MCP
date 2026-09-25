@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `windows_screenshot` `output`: `file` saves the PNG (to `savePath`, else a temp file) and returns its path and size; `preview` also returns a JPEG of at most 800px. `FLAUI_MCP_SCREENSHOT_OUTPUT` sets the default.
 - Forgiving names: selectors (batch, `windows_find`, the new tools), menu paths and options match loosely ("Save As" finds "Save &As...", shortcut text ignored), and a miss lists the closest names with refs.
 - `windows_set`: checked / expanded / selected / option / value, acting only if the state differs. Options open combo boxes when needed and realize virtualized list items. Also batch actions `check`, `uncheck`, `expand`, `collapse`, `select`, `set_value`.
 - `windows_menu`: invoke a menu command by path, including sub-menus and context menus; returns dialog handles like a click. Also batch action `menu`.
@@ -17,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test app: WinForms menu bar, status bar and context menu.
 
 ### Changed
+- Action results default to changes only. The first action in a window never seen before returns a one-line summary instead of a snapshot (the window is recorded, so later actions report changes); a newly opened dialog gets a small snapshot (60 elements). `postSnapshot: "full"` / `FLAUI_MCP_POST_SNAPSHOT=full` restores snapshots when there's nothing to compare. `FLAUI_MCP_POST_SNAPSHOT_DIFF` is replaced by that setting (`=0` still maps to `full`).
 - Tool descriptions rewritten to be about half as long, and to point to the better tool where there is one (e.g. `windows_find` over snapshots on big windows).
 - Modal dialog handling. `windows_click` no longer hangs when a click opens a modal dialog: the UIA call runs on its own thread while a Win32 monitor watches the target process for new dialogs. The click returns as soon as a dialog appears, with the dialog's window handle, and becomes a pending operation (`op1`, ...) that finishes when the dialog closes.
 - `windows_click` `mode`: `auto` (default), `invoke` (UIA patterns only), `input` (real mouse click at the element's clickable point, bringing its window forward first and refusing if another app covers the point). `mode` is also accepted by `windows_batch` click actions.

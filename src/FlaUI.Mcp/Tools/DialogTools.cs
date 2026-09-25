@@ -125,7 +125,7 @@ public class NativeDialogTool : ToolBase
             button = new { type = "string", description = "For press: button text, control ref, or standard name" },
             control = new { type = "string", description = "For set_text: control ref from action=read (e.g. 'c4')" },
             text = new { type = "string", description = "For set_text: the text" },
-            postSnapshot = new { type = "boolean", description = "For press: append a snapshot of the window shown next (default: true)" }
+            postSnapshot = new { type = new[] { "boolean", "string" }, description = PostActionModes.SchemaDescription }
         },
         required = new[] { "handle" }
     };
@@ -185,11 +185,11 @@ public class NativeDialogTool : ToolBase
                 var closed = WaitUntil(() => !DialogMonitor.IsOpen(hwnd), TimeSpan.FromMilliseconds(750));
                 var text = $"Pressed {target.Ref} \"{target.Text}\" in {handle}. " +
                            (closed ? "The dialog closed." : "The dialog is still open.");
-                if (_post != null && _post.IsEnabled(GetArgument<bool?>(arguments, "postSnapshot")))
+                if (_post != null && _post.ModeFor(arguments) != PostActionMode.Off)
                 {
                     var opened = DialogClassifier.NewSince(baseline, _monitor.GetDialogs(new HashSet<int> { pid }));
                     text = PostActionSnapshotter.Append(text, _post.Capture(
-                        new PostActionContext("press", pid, closed ? owner : hwnd, opened)));
+                        new PostActionContext("press", pid, closed ? owner : hwnd, opened), _post.ModeFor(arguments)));
                 }
                 return Task.FromResult(TextResult(text));
             }

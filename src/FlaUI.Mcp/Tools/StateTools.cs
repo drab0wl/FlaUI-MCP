@@ -50,13 +50,13 @@ internal static class ToolTarget
         return required ? (null, null, "Give a ref, or name / nameContains / automationId / role.") : (null, null, null);
     }
 
-    public static McpToolResult Result(ClickResult result, PostActionSnapshotter? post, bool? postSnapshot, string action)
+    public static McpToolResult Result(ClickResult result, PostActionSnapshotter? post, JsonElement? arguments, string action)
     {
         var text = result.Text;
-        if (post != null && post.IsEnabled(postSnapshot) && (!result.IsError || result.DialogOpened))
+        if (post != null && post.ModeFor(arguments) is var mode && mode != PostActionMode.Off && (!result.IsError || result.DialogOpened))
         {
             text = PostActionSnapshotter.Append(text, post.Capture(
-                new PostActionContext(action, result.ProcessId, result.WindowHwnd, result.NewDialogs)));
+                new PostActionContext(action, result.ProcessId, result.WindowHwnd, result.NewDialogs), mode));
         }
         return new McpToolResult
         {
@@ -101,7 +101,7 @@ public class SetTool : ToolBase
             selected = new { type = "boolean", description = "true: select the element itself" },
             option = new { type = "string", description = "Item to select inside the element" },
             value = new { type = new[] { "string", "number" } },
-            postSnapshot = new { type = "boolean", description = "Append what changed / a snapshot afterwards (default: true)" },
+            postSnapshot = new { type = new[] { "boolean", "string" }, description = PostActionModes.SchemaDescription },
         })
     };
 
@@ -143,7 +143,7 @@ public class SetTool : ToolBase
                 : option != null ? await _state.SelectAsync(element!, refId!, option)
                 : selected == true ? await _state.SelectAsync(element!, refId!, null)
                 : await _state.SetValueAsync(element!, refId!, value!);
-            return ToolTarget.Result(result, _post, GetArgument<bool?>(arguments, "postSnapshot"), "set");
+            return ToolTarget.Result(result, _post, arguments, "set");
         }
         catch (Exception ex)
         {
@@ -184,7 +184,7 @@ public class MenuTool : ToolBase
             path = new { type = new[] { "array", "string" }, items = new { type = "string" }, description = "Menu items in order" },
             window = new { type = "string", description = "Window whose menu bar to use (default: the app's foreground window)" },
             mode = new { type = "string", @enum = new[] { "auto", "input" }, description = "Default auto" },
-            postSnapshot = new { type = "boolean", description = "Append what changed / a snapshot afterwards (default: true)" },
+            postSnapshot = new { type = new[] { "boolean", "string" }, description = PostActionModes.SchemaDescription },
         }),
         required = new[] { "path" }
     };
@@ -220,7 +220,7 @@ public class MenuTool : ToolBase
         try
         {
             var result = await _menus.OpenAsync(handle, window, path, mode, element != null ? (element, refId!) : null);
-            return ToolTarget.Result(result, _post, GetArgument<bool?>(arguments, "postSnapshot"), "menu");
+            return ToolTarget.Result(result, _post, arguments, "menu");
         }
         catch (Exception ex)
         {
