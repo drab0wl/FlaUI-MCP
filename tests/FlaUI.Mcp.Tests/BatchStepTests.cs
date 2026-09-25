@@ -163,4 +163,52 @@ public class BatchStepTests
     {
         Assert.Equal(match, BatchPlan.TextMatches(actual, expected));
     }
+
+    [Fact]
+    public void Parse_Keys()
+    {
+        Assert.Equal(new[] { "Ctrl+Shift+B" }, Step("""{"action":"keys","keys":["Ctrl+Shift+B"]}""").Keys);
+        Assert.Equal(new[] { "Down", "Enter" }, Step("""{"action":"keys","keys":["Down","Enter"]}""").Keys);
+        Assert.Equal(new[] { "F5" }, Step("""{"action":"keys","keys":"F5"}""").Keys);
+        Assert.Equal(new[] { "Alt+F4" }, Step("""{"action":"keys","chord":"Alt+F4"}""").Keys);
+        Assert.Null(Step("""{"action":"click","ref":"w1e1"}""").Keys);
+    }
+
+    [Fact]
+    public void KeysFollowedByDialogWait_SkipSettle()
+    {
+        var steps = Steps(
+            """{"action":"keys","keys":["Ctrl+S"]}""",
+            """{"action":"wait","until":"dialog_open"}""");
+        Assert.True(BatchPlan.ExpectsDialog(steps, 0));
+        Assert.Equal(TimeSpan.Zero, BatchPlan.SettleTime(steps, 0));
+    }
+
+    [Fact]
+    public void Parse_Compact()
+    {
+        Assert.True(Step("""{"action":"snapshot","compact":true}""").Compact);
+        Assert.Null(Step("""{"action":"snapshot"}""").Compact);
+    }
+
+    [Fact]
+    public void FindFormat_GroupsByWindowWithPaths()
+    {
+        var text = FindFormat.Render(new List<(string, string, IReadOnlyList<string>)>
+        {
+            ("w1", "button \"Build\" [ref=w1e40]", new[] { "toolbar \"Standard\"" }),
+            ("w1", "menuitem \"Build\" [ref=w1e7]", Array.Empty<string>()),
+            ("w5", "button \"Build\" [ref=w5e2]", new[] { "group \"Options\"", "tab \"General\"" }),
+        }, more: true, limit: 3);
+
+        Assert.Equal(new[]
+        {
+            "in w1:",
+            "- button \"Build\" [ref=w1e40]  (in toolbar \"Standard\")",
+            "- menuitem \"Build\" [ref=w1e7]",
+            "in w5:",
+            "- button \"Build\" [ref=w5e2]  (in group \"Options\" > tab \"General\")",
+            "... more than 3 matches; narrow the selector (role, handle) or raise limit.",
+        }, text.Split('\n').Select(l => l.TrimEnd('\r')));
+    }
 }

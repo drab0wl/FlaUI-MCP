@@ -1,6 +1,7 @@
 using PlaywrightWindows.Mcp;
 using PlaywrightWindows.Mcp.Core;
 using PlaywrightWindows.Mcp.Core.Actions;
+using PlaywrightWindows.Mcp.Core.Batch;
 using PlaywrightWindows.Mcp.Core.Diagnostics;
 using PlaywrightWindows.Mcp.Core.Dialogs;
 using PlaywrightWindows.Mcp.Tools;
@@ -41,6 +42,7 @@ toolRegistry.RegisterTool(new BatchTool(sessionManager, elementRegistry, clickEx
 toolRegistry.RegisterTool(new DialogsTool(sessionManager, dialogMonitor, pendingOperations));
 toolRegistry.RegisterTool(new NativeDialogTool(sessionManager, postAction));
 toolRegistry.RegisterTool(new WaitTool(sessionManager, dialogMonitor, pendingOperations));
+toolRegistry.RegisterTool(new FindTool(new ElementFinder(sessionManager, elementRegistry, dialogMonitor, pendingOperations)));
 
 // Create and run MCP server
 var server = new McpServer(toolRegistry);

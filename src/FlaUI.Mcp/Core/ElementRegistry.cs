@@ -9,11 +9,15 @@ namespace PlaywrightWindows.Mcp.Core;
 public class ElementRegistry
 {
     private readonly RefTable<AutomationElement> _table = new();
+    private readonly Dictionary<string, RecordedSnapshot> _snapshots = new();
 
     /// <summary>
     /// Clear all elements for a window (called before new snapshot)
     /// </summary>
     public void ClearWindow(string windowHandle) => _table.BeginSnapshot(windowHandle);
+
+    /// <param name="partial">Only part of the window will be visited: keep numbering after the existing refs.</param>
+    public void BeginSnapshot(string windowHandle, bool partial) => _table.BeginSnapshot(windowHandle, partial);
 
     /// <summary>
     /// Register an element and return its ref
@@ -48,6 +52,20 @@ public class ElementRegistry
     /// </summary>
     public bool HasElement(string refId) => _table.Get(refId) != null;
 
+    /// <summary>
+    /// The last whole-window snapshot built for a window (full text, before any compaction),
+    /// kept so a later snapshot can be reported as a list of changes.
+    /// </summary>
+    public void RecordSnapshot(string windowHandle, string text, bool complete)
+    {
+        lock (_snapshots) _snapshots[windowHandle] = new RecordedSnapshot(text, complete);
+    }
+
+    public RecordedSnapshot? LastSnapshot(string windowHandle)
+    {
+        lock (_snapshots) return _snapshots.TryGetValue(windowHandle, out var s) ? s : null;
+    }
+
     /// <summary>Refs look like "w3e12"; "w3" is the window the element was snapshotted from.</summary>
     public static string? WindowHandleOf(string refId)
     {
@@ -55,6 +73,9 @@ public class ElementRegistry
         return match.Success ? match.Groups[1].Value : null;
     }
 }
+
+/// <param name="Complete">False if the snapshot hit a limit, so elements missing from it may still exist.</param>
+public sealed record RecordedSnapshot(string Text, bool Complete);
 
 /// <summary>
 /// Ref bookkeeping behind <see cref="ElementRegistry"/>, generic so it can be unit tested.
@@ -74,7 +95,7 @@ public sealed class RefTable<T> where T : class
         public HashSet<string> Current = new();
     }
 
-    public void BeginSnapshot(string window)
+    public void BeginSnapshot(string window, bool partial = false)
     {
         lock (_gate)
         {
@@ -87,7 +108,7 @@ public sealed class RefTable<T> where T : class
             w.KeyToRef = new Dictionary<string, string>();
             w.Current = new HashSet<string>();
             // Nothing to keep stable against: number from 1 as before.
-            if (w.PreviousKeyToRef.Count == 0) w.Counter = 0;
+            if (w.PreviousKeyToRef.Count == 0 && !partial) w.Counter = 0;
         }
     }
 

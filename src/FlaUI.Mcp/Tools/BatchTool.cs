@@ -8,6 +8,7 @@ using PlaywrightWindows.Mcp.Core.Actions;
 using PlaywrightWindows.Mcp.Core.Batch;
 using PlaywrightWindows.Mcp.Core.Diagnostics;
 using PlaywrightWindows.Mcp.Core.Dialogs;
+using PlaywrightWindows.Mcp.Core.Snapshots;
 using PlaywrightWindows.Mcp.Core.Win32;
 
 namespace PlaywrightWindows.Mcp.Tools;
@@ -57,7 +58,8 @@ public class BatchTool : ToolBase
 
     public override string Description =>
         "Execute multiple actions in a single call. Much faster than individual calls. " +
-        "Actions: click, type, fill, wait, snapshot, dialog_press, dialog_set_text. " +
+        "Actions: click, type, fill, keys (chords like Ctrl+Shift+B, to the focused element or a ref/selector), " +
+        "wait, snapshot, dialog_press, dialog_set_text. " +
         "Target elements by ref, or by selector (name / nameContains / automationId / role, optionally " +
         "handle to limit the search to one window; handle \"$dialog\" is the dialog the batch last saw open), " +
         "so a whole flow can run without a snapshot in between. " +
@@ -84,7 +86,7 @@ public class BatchTool : ToolBase
                         action = new
                         {
                             type = "string",
-                            @enum = new[] { "click", "type", "fill", "wait", "snapshot", "dialog_press", "dialog_set_text" },
+                            @enum = new[] { "click", "type", "fill", "keys", "wait", "snapshot", "dialog_press", "dialog_set_text" },
                             description = "Action type"
                         },
                         @ref = new
@@ -123,6 +125,12 @@ public class BatchTool : ToolBase
                             type = "string",
                             description = "Value for fill action"
                         },
+                        keys = new
+                        {
+                            type = "array",
+                            items = new { type = "string" },
+                            description = "For keys: chords to press in order, e.g. [\"Ctrl+Shift+B\"] or [\"Down\", \"Enter\"]"
+                        },
                         ms = new
                         {
                             type = "integer",
@@ -138,6 +146,11 @@ public class BatchTool : ToolBase
                         {
                             type = "integer",
                             description = "Timeout for wait until=... (default: 5000)"
+                        },
+                        compact = new
+                        {
+                            type = "boolean",
+                            description = "For snapshot: hide offscreen elements and layout-only groups"
                         },
                         handle = new
                         {
@@ -280,6 +293,9 @@ public class BatchTool : ToolBase
                 return Act(run, step, ExecuteType);
             case "fill":
                 return Act(run, step, ExecuteFill);
+            case "keys":
+            case "send_keys":
+                return await ExecuteKeysAsync(steps, index, run);
             case "wait":
                 return await ExecuteWaitAsync(step, run);
             case "snapshot":
@@ -379,6 +395,56 @@ public class BatchTool : ToolBase
 
         Keyboard.Type(text);
         return $"Typed \"{text}\"";
+    }
+
+    private async Task<StepResult> ExecuteKeysAsync(IReadOnlyList<BatchStep> steps, int index, Run run)
+    {
+        var step = steps[index];
+        if (step.Keys is not { Count: > 0 }) return new StepResult("keys needs 'keys' (e.g. [\"Ctrl+Shift+B\"]) or 'chord'", true);
+
+        var (element, refId, error) = Resolve(step, run);
+        if (error != null) return new StepResult(error, true);
+        if (element != null)
+        {
+            element.Focus();
+            Thread.Sleep(30);
+        }
+
+        run.Baseline = _dialogs.GetDialogs(null);
+        if (!SendKeysTool.TrySendSequence(step.Keys, out var sent, out var keyError))
+        {
+            return new StepResult(keyError!, true);
+        }
+
+        // Keys go to whatever has focus: report on the foreground window afterwards.
+        var foreground = NativeMethods.GetForegroundWindow();
+        var hwnd = refId != null && ElementRegistry.WindowHandleOf(refId) is { } h ? _sessionManager.GetHwnd(h) : foreground;
+        run.LastAction = new PostActionContext("batch", hwnd != 0 ? NativeMethods.GetProcessId(hwnd) : 0, hwnd, Array.Empty<DialogInfo>());
+        var text = $"Sent {sent} to {refId ?? "the focused element"}";
+
+        // Like a click: a dialog the keys opened stops the batch unless the next step expects it.
+        var settle = BatchPlan.SettleTime(steps, index) ?? new ActionRunOptions().SettleTime;
+        if (settle > TimeSpan.Zero && !BatchPlan.ExpectsDialog(steps, index))
+        {
+            var pids = _sessionManager.TrackedProcessIds;
+            IReadOnlyList<DialogInfo> opened = Array.Empty<DialogInfo>();
+            await PollAsync(() =>
+            {
+                opened = DialogClassifier.NewSince(run.Baseline, _dialogs.GetDialogs(pids)).Where(d => d.IsBlocking).ToList();
+                return opened.Count > 0;
+            }, settle);
+            if (opened.Count > 0)
+            {
+                RememberDialogs(run, opened);
+                run.LastAction = run.LastAction with { NewDialogs = opened };
+                var dialogs = string.Join("; ", opened.Select(d =>
+                    $"{_sessionManager.RegisterNativeWindow(d.Hwnd, d.ProcessId)} {DialogClassifier.Describe(d)}"));
+                return new StepResult($"{text}. They opened: {dialogs}", false, Stop: true,
+                    StopNote: $"Stopped after action {index + 1}: the keys opened a dialog. Handle it, then continue " +
+                              "with the remaining actions. (If the dialog was expected, put a wait with until=dialog_open right after.)");
+            }
+        }
+        return new StepResult(text, false);
     }
 
     private static string ExecuteFill(BatchStep step, AutomationElement? element)
@@ -673,6 +739,7 @@ public class BatchTool : ToolBase
         }
 
         var snapshot = _snapshotBuilder.BuildSnapshot(handle!, window);
+        if (step.Compact ?? SnapshotTool.CompactByDefault) snapshot = SnapshotText.CompactText(snapshot);
         return new StepResult($"\n{snapshot}", false);
     }
 

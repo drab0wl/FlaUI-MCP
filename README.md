@@ -121,7 +121,7 @@ Or using `dotnet run`:
 | Tool | Description |
 |------|-------------|
 | `windows_launch` | Launch a Windows application |
-| `windows_snapshot` | Get accessibility tree with element refs (refs stay the same across snapshots for unchanged elements) |
+| `windows_snapshot` | Get accessibility tree with element refs (refs stay the same across snapshots for unchanged elements); `ref` for one part, `depth`, `compact` |
 | `windows_click` | Click an element by ref; never hangs on a modal dialog; result includes a snapshot of what opened |
 | `windows_type` | Type text into an element |
 | `windows_send_keys` | Send key presses or key chords (for example `Ctrl+A`) |
@@ -135,6 +135,7 @@ Or using `dotnet run`:
 | `windows_dialogs` | List open dialogs and pending clicks (Win32, works while UIA is blocked) |
 | `windows_dialog` | Read/press/type into/close a Win32 dialog without UI Automation; press results include a snapshot of what the app shows next |
 | `windows_wait` | Wait for a pending click to finish, or a dialog to open or close |
+| `windows_find` | Find elements by name / automation id / role and get their refs, without reading a whole snapshot |
 
 `windows_screenshot` supports an optional `background: true` argument when a
 window `handle` is provided. This uses native background capture when available
@@ -212,8 +213,9 @@ selector: `name`, `nameContains`, `automationId`, `role` (as snapshots print it)
 | `click` | `ref` or selector; `mode` (`auto`/`invoke`/`input`); `noDialog: true` or `settleMs` to skip/shorten the 250 ms dialog watch |
 | `type` | `text`; optional `ref` or selector to focus first |
 | `fill` | `ref` or selector; `value` |
+| `keys` | `keys` (array of chords like `Ctrl+Shift+B`, `Down`, `Enter`) or `chord`; optional `ref` or selector to focus first. A dialog it opens stops the batch like a click's |
 | `wait` | `ms`, or `until` + `timeoutMs` (default 5000): `dialog_open`, `dialog_closed` (`handle`, default the last dialog), `element` / `element_gone` (selector), `text_contains` (selector + `text`, case-insensitive) |
-| `snapshot` | optional `handle` |
+| `snapshot` | optional `handle`; `compact` |
 | `dialog_press` | `button` (text, `c3` ref, or `ok`/`cancel`/`yes`/`no`/...); optional `handle` (default the last dialog) |
 | `dialog_set_text` | `text`; optional `control` (`c4`, default the first edit box) and `handle` |
 
@@ -227,6 +229,8 @@ has a 24-second budget; if it runs out, the result says which action to continue
 |----------------------|--------|
 | `FLAUI_MCP_POST_SNAPSHOT` | `0` to leave the post-action snapshot off unless a call asks for it (`postSnapshot: true`) |
 | `FLAUI_MCP_POST_SNAPSHOT_MAX_NODES` / `_MAX_CHARS` | Bounds for the post-action snapshot (default 150 elements / 8000 characters) |
+| `FLAUI_MCP_POST_SNAPSHOT_DIFF` | `0` to always show a snapshot after actions, never a list of changes |
+| `FLAUI_MCP_SNAPSHOT_COMPACT` | `1` to make `compact: true` the default for `windows_snapshot` |
 | `FLAUI_MCP_SNAPSHOT_MODE` | `cached` (default), `subtree`, or `live` (the original per-property reads) |
 | `FLAUI_MCP_TIMING` | `0` to turn off the `[timing]` lines on stderr |
 | `FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS` | Make UIA calls against a blocked provider fail after this long |
@@ -297,18 +301,43 @@ Driving an app one tool call at a time is slow: each step costs a model turn. Fl
 the number of calls:
 
 - **Action results show what happened.** `windows_click`, `windows_fill`, `windows_dialog`
-  `action=press` and `windows_batch` end with a bounded snapshot (150 elements / 8000
-  characters by default) of the window you'll most likely act on next: the dialog the action
-  opened, else the app's foreground window. Its refs work immediately, and refs from an
-  earlier full snapshot of that window stay valid. Pass `postSnapshot: false` to skip it, or
-  set `FLAUI_MCP_POST_SNAPSHOT=0` to make that the default
-  (`FLAUI_MCP_POST_SNAPSHOT_MAX_NODES` / `_MAX_CHARS` change the bounds). While a pending click
-  blocks the app's UI Automation, the snapshot falls back to the dialog's Win32 controls.
+  `action=press` and `windows_batch` end with the state of the window you'll most likely act
+  on next: the dialog the action opened, else the app's foreground window. If you've seen that
+  window before, you get only what changed, with refs:
+
+  ```
+  --- after click: foreground window w1 "Editor" (changes: 1 added, 1 removed, 1 changed) ---
+  added:
+    in group "Find" [ref=w1e20]:
+      - text "3 matches" [ref=w1e412]
+  removed:
+    - text "Searching..." [ref=w1e409]
+  changed:
+    - button "Next" [ref=w1e22]  (was: button "Next" [ref=w1e22] [disabled])
+  ```
+
+  Otherwise (a new dialog, or a window never snapshotted) you get a compact snapshot, capped at
+  150 elements / 8000 characters. Refs from earlier snapshots stay valid either way. Pass
+  `postSnapshot: false` to skip it; set `FLAUI_MCP_POST_SNAPSHOT=0` to make that the default.
+  While a pending click blocks the app's UI Automation, you get the dialog's Win32 controls.
+- **Search instead of reading.** On big windows (IDEs, Office) a full snapshot is thousands of
+  lines. `windows_find` returns just the matches, each with the named elements it's inside:
+
+  ```
+  windows_find { "nameContains": "Build", "role": "menuitem" }
+  → in w1:
+    - menuitem "Build Solution" [ref=w1e88]  (in menubar "MenuBar" > menuitem "Build")
+  ```
+
+  `windows_snapshot` takes `ref` to read one part of a window (refs elsewhere stay valid),
+  `depth` to stop early, and `compact: true` to leave out offscreen elements and unnamed
+  groups that only wrap one element.
 - **`windows_batch` finds elements itself.** Actions can target `name`, `nameContains`,
   `automationId` and `role` (as printed in snapshots) instead of a ref, optionally limited to a
   window with `handle` (`"$dialog"` is the dialog the batch last saw open). Waits can be for a
   condition: `until` = `dialog_open`, `dialog_closed`, `element`, `element_gone`,
   `text_contains`. `dialog_press` and `dialog_set_text` drive a dialog with Win32 messages.
+  `keys` sends chords (`["Ctrl+Shift+B"]`) to the focused element or a ref/selector.
 - **Expected dialogs don't stop a batch.** A click that opens a dialog still stops the batch,
   unless the next action is `wait` with `until: "dialog_open"`.
 - **No settle wait when there's nothing to wait for.** Clicks watch for a dialog for 250 ms

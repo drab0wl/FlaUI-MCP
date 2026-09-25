@@ -111,4 +111,19 @@ public class RefTableTests
     {
         Assert.Equal(handle, ElementRegistry.WindowHandleOf(refId));
     }
+
+    [Fact]
+    public void PartialSnapshotWithoutKeys_KeepsNumberingAfterExistingRefs()
+    {
+        var table = new RefTable<string>();
+        Snapshot(table, "w1", ("a", null), ("b", null), ("c", null));
+
+        table.BeginSnapshot("w1", partial: true);
+        var sub = table.Register("w1", "b-sub", null);
+        table.CompleteSnapshot("w1", truncated: true);
+
+        Assert.Equal("w1e4", sub);
+        Assert.Equal("a", table.Get("w1e1"));
+        Assert.Equal("c", table.Get("w1e3"));
+    }
 }

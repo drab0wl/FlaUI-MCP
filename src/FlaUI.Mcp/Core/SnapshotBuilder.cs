@@ -63,13 +63,17 @@ public class SnapshotBuilder
 
     public string BuildSnapshot(string windowHandle, AutomationElement root) => Build(windowHandle, root).Text;
 
-    public SnapshotResult Build(string windowHandle, AutomationElement root, SnapshotLimits? limits = null)
+    /// <param name="partial">
+    /// The root is an element inside the window, not the window: refs outside it are kept, and
+    /// the result isn't recorded as the window's latest snapshot.
+    /// </param>
+    public SnapshotResult Build(string windowHandle, AutomationElement root, SnapshotLimits? limits = null, bool partial = false)
     {
         limits ??= SnapshotLimits.Unbounded with { MaxDepth = _maxDepth };
         var sw = Stopwatch.StartNew();
 
         // Clear previous elements for this window
-        _elementRegistry.ClearWindow(windowHandle);
+        _elementRegistry.BeginSnapshot(windowHandle, partial);
 
         var walk = new Walk(windowHandle, limits);
         var mode = _mode;
@@ -93,12 +97,18 @@ public class SnapshotBuilder
         }
         finally
         {
-            _elementRegistry.CompleteSnapshot(windowHandle, walk.Truncated);
+            _elementRegistry.CompleteSnapshot(windowHandle, walk.Truncated || partial);
         }
 
         if (walk.Truncated)
         {
             walk.Text.AppendLine(SnapshotFormat.TruncationNote(walk.Nodes, walk.TruncatedReason!));
+        }
+        if (!partial)
+        {
+            // A shallower walk than the default isn't a baseline for later change reports.
+            var complete = !walk.Truncated && limits.MaxDepth >= new SnapshotLimits().MaxDepth;
+            _elementRegistry.RecordSnapshot(windowHandle, walk.Text.ToString(), complete);
         }
 
         var result = new SnapshotResult(walk.Text.ToString(), walk.Nodes, walk.Truncated, sw.Elapsed, mode);

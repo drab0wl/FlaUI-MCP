@@ -131,6 +131,12 @@ public sealed record BatchStep
     public bool NoDialog { get; init; }
     public int? SettleMs { get; init; }
 
+    /// <summary>For "keys": chords to press in order, from "keys" (array or string) or "chord".</summary>
+    public IReadOnlyList<string>? Keys { get; init; }
+
+    /// <summary>For "snapshot": hide offscreen elements and layout-only groups.</summary>
+    public bool? Compact { get; init; }
+
     public bool IsWaitFor(string condition) => Action == "wait" && Until == condition;
 
     public static BatchStep Parse(JsonElement step)
@@ -153,11 +159,28 @@ public sealed record BatchStep
             Control = Str(step, "control"),
             NoDialog = step.TryGetProperty("noDialog", out var nd) && nd.ValueKind == JsonValueKind.True,
             SettleMs = Int(step, "settleMs"),
+            Keys = KeyList(step),
+            Compact = step.TryGetProperty("compact", out var c) && c.ValueKind is JsonValueKind.True or JsonValueKind.False
+                ? c.GetBoolean()
+                : null,
         };
     }
 
     private static string? Str(JsonElement e, string name) =>
         e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+
+    private static IReadOnlyList<string>? KeyList(JsonElement step)
+    {
+        if (step.TryGetProperty("keys", out var keys))
+        {
+            if (keys.ValueKind == JsonValueKind.Array)
+            {
+                return keys.EnumerateArray().Where(k => k.ValueKind == JsonValueKind.String).Select(k => k.GetString()!).ToList();
+            }
+            if (keys.ValueKind == JsonValueKind.String) return new[] { keys.GetString()! };
+        }
+        return Str(step, "chord") is { } chord ? new[] { chord } : null;
+    }
 
     private static int? Int(JsonElement e, string name) =>
         e.TryGetProperty(name, out var p) && p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var v) ? v : null;
@@ -201,4 +224,30 @@ public static class BatchPlan
 
     public static bool TextMatches(string? actual, string expected) =>
         actual != null && actual.Contains(expected, StringComparison.OrdinalIgnoreCase);
+}
+
+/// <summary>How windows_find prints its matches. Pure.</summary>
+public static class FindFormat
+{
+    public static string Render(IReadOnlyList<(string WindowHandle, string Line, IReadOnlyList<string> Path)> matches, bool more, int limit)
+    {
+        var sb = new System.Text.StringBuilder();
+        string? window = null;
+        foreach (var (handle, line, path) in matches)
+        {
+            if (handle != window)
+            {
+                sb.AppendLine($"in {handle}:");
+                window = handle;
+            }
+            sb.Append("- ").Append(line);
+            if (path.Count > 0) sb.Append("  (in ").Append(string.Join(" > ", path)).Append(')');
+            sb.AppendLine();
+        }
+        if (more)
+        {
+            sb.AppendLine($"... more than {limit} matches; narrow the selector (role, handle) or raise limit.");
+        }
+        return sb.ToString().TrimEnd();
+    }
 }

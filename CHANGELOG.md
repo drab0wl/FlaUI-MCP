@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS` environment variable to cap UIA call time.
 - Action results include post-action state: `windows_click`, `windows_fill`, `windows_dialog` press and `windows_batch` append a bounded snapshot of the dialog the action opened, or the app's foreground window. `postSnapshot: false` or `FLAUI_MCP_POST_SNAPSHOT=0` turns it off; `FLAUI_MCP_POST_SNAPSHOT_MAX_NODES` / `_MAX_CHARS` bound it.
 - `windows_batch` selectors (`name`, `nameContains`, `automationId`, `role`, `handle`, `index`), condition waits (`until`: `dialog_open`, `dialog_closed`, `element`, `element_gone`, `text_contains`), and `dialog_press` / `dialog_set_text` actions. A click followed by `wait until=dialog_open` no longer stops the batch.
+- Post-action results list what changed (added / removed / changed elements, with refs) when the window has been snapshotted before, instead of repeating its first 150 elements. `FLAUI_MCP_POST_SNAPSHOT_DIFF=0` turns this off.
+- `windows_find`: search by name / nameContains / automationId / role and get refs plus each match's named ancestors, without a full snapshot.
+- `windows_snapshot` `ref` (snapshot one element's subtree; other refs stay valid), `depth`, and `compact` (hide offscreen elements and unnamed single-child groups; `FLAUI_MCP_SNAPSHOT_COMPACT=1` makes it the default). Post-action snapshots are always compact.
+- `windows_batch` `keys` action (chords such as `Ctrl+Shift+B`); like a click, a dialog it opens stops the batch unless the next action waits for one.
 - `settleMs` on `windows_click`, and `noDialog` / `settleMs` on batch clicks, to skip or shorten the 250 ms dialog-settle wait.
 - Per-tool timing on stderr (`[timing] ...`: execution, status-block time, and the gap between calls), with a periodic per-tool summary. `FLAUI_MCP_TIMING=0` disables it.
 - `FlaUI.Mcp.exe --bench-snapshot "<title>"` compares snapshot modes on a live window.

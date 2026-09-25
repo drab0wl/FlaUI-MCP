@@ -254,6 +254,37 @@ public class SendKeysTool : ToolBase
         }
     }
 
+    /// <summary>
+    /// Presses each chord in turn ("Ctrl+Shift+B", "Enter"). Everything is parsed first, so a
+    /// typo sends nothing.
+    /// </summary>
+    internal static bool TrySendSequence(IReadOnlyList<string> chords, out string sent, out string? error)
+    {
+        sent = "";
+        var parsed = new List<(string Text, List<VirtualKeyShort> Keys)>();
+        foreach (var chord in chords)
+        {
+            var tokens = SplitChord(chord).ToList();
+            if (tokens.Count == 0)
+            {
+                error = "No keys were parsed from keys sequence.";
+                return false;
+            }
+            var keys = TryResolveKeys(tokens, out error);
+            if (error != null) return false;
+            parsed.Add((string.Join("+", tokens), keys));
+        }
+
+        foreach (var (_, keys) in parsed)
+        {
+            PressKeys(keys);
+            Thread.Sleep(30);
+        }
+        sent = string.Join(", ", parsed.Select(p => p.Text));
+        error = null;
+        return true;
+    }
+
     private static List<VirtualKeyShort> TryResolveKeys(List<string> tokens, out string? error)
     {
         var keys = new List<VirtualKeyShort>();

@@ -21,6 +21,7 @@ public sealed class PostActionSnapshotter
     private readonly DialogMonitor _dialogs;
     private readonly PendingOperationRegistry _pending;
     private readonly SnapshotBuilder _builder;
+    private readonly ElementRegistry _elements;
 
     public PostActionSnapshotter(
         SessionManager sessions,
@@ -33,6 +34,7 @@ public sealed class PostActionSnapshotter
         _dialogs = dialogs;
         _pending = pending;
         _builder = new SnapshotBuilder(elements);
+        _elements = elements;
         Options = options ?? PostActionOptions.FromEnvironment();
     }
 
@@ -98,13 +100,27 @@ public sealed class PostActionSnapshotter
         var window = _sessions.GetWindow(handle);
         if (window == null) return null;
 
+        var previous = _elements.LastSnapshot(handle);
         var result = _builder.Build(handle, window, new SnapshotLimits
         {
-            MaxNodes = Options.MaxNodes,
-            MaxChars = Options.MaxChars,
+            MaxNodes = Math.Max(Options.WalkMaxNodes, Options.MaxNodes),
             DeadlineUtc = DateTime.UtcNow + Options.TimeBudget,
         });
-        return $"{header}\n{result.Text.TrimEnd()}";
+        var full = SnapshotText.CompactText(result.Text, Options.MaxNodes, Options.MaxChars).TrimEnd();
+
+        if (Options.Diff && previous is { Complete: true } && !result.Truncated)
+        {
+            var diff = SnapshotDiff.Compute(ParsedSnapshot.Parse(previous.Text), ParsedSnapshot.Parse(result.Text));
+            var changes = diff.Render(Options.MaxChars).TrimEnd();
+            // A list of changes, unless the window changed so much that the snapshot is shorter.
+            if (changes.Length < full.Length)
+            {
+                var detail = diff.IsEmpty ? $"unchanged, {diff.Unchanged} elements" : $"changes: {diff.Summary}";
+                var diffHeader = PostActionTargeting.Header(context.Action, handle, title, target.Kind, detail);
+                return changes.Length == 0 ? diffHeader : $"{diffHeader}\n{changes}";
+            }
+        }
+        return $"{header}\n{full}";
     }
 
     private string Bound(string text) =>

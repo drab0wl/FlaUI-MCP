@@ -12,6 +12,15 @@ public sealed record PostActionOptions
     public bool Enabled { get; init; } = true;
     public int MaxNodes { get; init; } = 150;
     public int MaxChars { get; init; } = 8000;
+
+    /// <summary>
+    /// When the window has a complete earlier snapshot, report what changed instead of the
+    /// first MaxNodes elements (FLAUI_MCP_POST_SNAPSHOT_DIFF=0 turns this off).
+    /// </summary>
+    public bool Diff { get; init; } = true;
+
+    /// <summary>How much of the window to read to find the changes.</summary>
+    public int WalkMaxNodes { get; init; } = 5000;
     public TimeSpan TimeBudget { get; init; } = TimeSpan.FromSeconds(4);
 
     public static PostActionOptions FromEnvironment()
@@ -21,6 +30,11 @@ public sealed record PostActionOptions
         if (enabled != null && enabled.Trim().ToLowerInvariant() is "0" or "false" or "off" or "no")
         {
             options = options with { Enabled = false };
+        }
+        var diff = Environment.GetEnvironmentVariable("FLAUI_MCP_POST_SNAPSHOT_DIFF");
+        if (diff != null && diff.Trim().ToLowerInvariant() is "0" or "false" or "off" or "no")
+        {
+            options = options with { Diff = false };
         }
         if (int.TryParse(Environment.GetEnvironmentVariable("FLAUI_MCP_POST_SNAPSHOT_MAX_NODES"), out var nodes) && nodes > 0)
         {
@@ -92,7 +106,7 @@ public static class PostActionTargeting
         return new PostActionTarget(0, PostActionTargetKind.None);
     }
 
-    public static string Header(string action, string handle, string title, PostActionTargetKind kind)
+    public static string Header(string action, string handle, string title, PostActionTargetKind kind, string? detail = null)
     {
         var what = kind switch
         {
@@ -101,6 +115,6 @@ public static class PostActionTargeting
             PostActionTargetKind.Foreground => "foreground window",
             _ => "window",
         };
-        return $"--- after {action}: {what} {handle} \"{title}\" ---";
+        return $"--- after {action}: {what} {handle} \"{title}\"{(detail != null ? $" ({detail})" : "")} ---";
     }
 }

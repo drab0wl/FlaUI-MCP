@@ -2,6 +2,7 @@ using System.Text.Json;
 using FlaUI.Core.AutomationElements;
 using PlaywrightWindows.Mcp.Core;
 using PlaywrightWindows.Mcp.Core.Actions;
+using PlaywrightWindows.Mcp.Core.Snapshots;
 using PlaywrightWindows.Mcp.Core.Win32;
 
 namespace PlaywrightWindows.Mcp.Tools;
@@ -29,7 +30,13 @@ public class SnapshotTool : ToolBase
     public override string Description => 
         "Capture accessibility snapshot of a window. Returns a structured tree with element refs " +
         "that can be used with windows_click, windows_type, etc. This is the primary tool for " +
-        "understanding window contents - use it before interacting with elements.";
+        "understanding window contents - use it before interacting with elements. On big windows, pass " +
+        "ref to read one part (e.g. a pane found with windows_find), depth to stop early, or compact=true " +
+        "to hide offscreen elements and layout-only groups.";
+
+    /// <summary>FLAUI_MCP_SNAPSHOT_COMPACT=1 makes compact the default.</summary>
+    public static bool CompactByDefault { get; } =
+        Environment.GetEnvironmentVariable("FLAUI_MCP_SNAPSHOT_COMPACT")?.Trim().ToLowerInvariant() is "1" or "true" or "on" or "yes";
 
     public override object InputSchema => new
     {
@@ -40,6 +47,21 @@ public class SnapshotTool : ToolBase
             {
                 type = "string",
                 description = "Window handle from windows_launch or windows_list_windows. If omitted, uses the most recently launched window."
+            },
+            @ref = new
+            {
+                type = "string",
+                description = "Snapshot only this element and what's inside it (refs elsewhere in the window stay valid)"
+            },
+            depth = new
+            {
+                type = "integer",
+                description = "Levels below the root to include (default 10)"
+            },
+            compact = new
+            {
+                type = "boolean",
+                description = "Hide offscreen elements and unnamed groups that wrap a single element (default false)"
             }
         }
     };
@@ -47,6 +69,15 @@ public class SnapshotTool : ToolBase
     public override Task<McpToolResult> ExecuteAsync(JsonElement? arguments)
     {
         var handle = GetStringArgument(arguments, "handle");
+        var refId = GetStringArgument(arguments, "ref");
+        var depth = GetArgument<int?>(arguments, "depth");
+        var compact = GetArgument<bool?>(arguments, "compact") ?? CompactByDefault;
+        var limits = SnapshotLimits.Unbounded with { MaxDepth = depth is >= 0 ? depth.Value : 10 };
+
+        if (!string.IsNullOrEmpty(refId))
+        {
+            return Task.FromResult(SnapshotSubtree(refId, limits, compact));
+        }
 
         try
         {
@@ -96,12 +127,35 @@ public class SnapshotTool : ToolBase
                 handle = _sessionManager.RegisterWindow(window);
             }
 
-            var snapshot = _snapshotBuilder.BuildSnapshot(handle!, window);
-            return Task.FromResult(TextResult(snapshot));
+            var snapshot = _snapshotBuilder.Build(handle!, window, limits).Text;
+            return Task.FromResult(TextResult(compact ? SnapshotText.CompactText(snapshot) : snapshot));
         }
         catch (Exception ex)
         {
             return Task.FromResult(ErrorResult($"Failed to capture snapshot: {ex.Message}"));
+        }
+    }
+
+    private McpToolResult SnapshotSubtree(string refId, SnapshotLimits limits, bool compact)
+    {
+        var handle = ElementRegistry.WindowHandleOf(refId);
+        var element = _elementRegistry.GetElement(refId);
+        if (handle == null || element == null)
+        {
+            return ErrorResult($"Element not found: {refId}. Run windows_snapshot or windows_find to refresh element refs.");
+        }
+
+        var blocked = CheckBlocked(handle);
+        if (blocked != null) return ErrorResult(blocked);
+
+        try
+        {
+            var snapshot = _snapshotBuilder.Build(handle, element, limits, partial: true).Text;
+            return TextResult(compact ? SnapshotText.CompactText(snapshot) : snapshot);
+        }
+        catch (Exception ex)
+        {
+            return ErrorResult($"Failed to capture snapshot: {ex.Message}");
         }
     }
 
