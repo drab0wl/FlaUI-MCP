@@ -21,6 +21,9 @@ public sealed record ElementSelector(
 
     public bool HasCriteria => Name != null || NameContains != null || AutomationId != null || Role != null;
 
+    /// <summary>A name or automation id to match loosely or suggest near misses for.</summary>
+    public bool CanForgive => Name != null || AutomationId != null;
+
     /// <summary>
     /// Reads a selector from a step: its "selector" object, else the step's own
     /// name / nameContains / automationId / role fields. Null when the step has none.
@@ -134,6 +137,12 @@ public sealed record BatchStep
     /// <summary>For "keys": chords to press in order, from "keys" (array or string) or "chord".</summary>
     public IReadOnlyList<string>? Keys { get; init; }
 
+    /// <summary>For "select": the item to pick inside a combo box / list / tree / tab list.</summary>
+    public string? Option { get; init; }
+
+    /// <summary>For "menu": the items to open, in order.</summary>
+    public IReadOnlyList<string>? Path { get; init; }
+
     /// <summary>For "snapshot": hide offscreen elements and layout-only groups.</summary>
     public bool? Compact { get; init; }
 
@@ -149,7 +158,6 @@ public sealed record BatchStep
             Selector = selector,
             SelectorError = selectorError,
             Text = Str(step, "text"),
-            Value = Str(step, "value"),
             Mode = Str(step, "mode"),
             Until = WaitConditions.Normalize(Str(step, "until")),
             Ms = Int(step, "ms"),
@@ -160,6 +168,10 @@ public sealed record BatchStep
             NoDialog = step.TryGetProperty("noDialog", out var nd) && nd.ValueKind == JsonValueKind.True,
             SettleMs = Int(step, "settleMs"),
             Keys = KeyList(step),
+            Option = Str(step, "option"),
+            Path = MenuPath.Parse(step),
+            // set_value takes numbers too.
+            Value = Str(step, "value") ?? (step.TryGetProperty("value", out var v) && v.ValueKind == JsonValueKind.Number ? v.GetRawText() : null),
             Compact = step.TryGetProperty("compact", out var c) && c.ValueKind is JsonValueKind.True or JsonValueKind.False
                 ? c.GetBoolean()
                 : null,
@@ -189,6 +201,12 @@ public sealed record BatchStep
 /// <summary>Decisions that depend on the shape of the batch, not on the app. Pure.</summary>
 public static class BatchPlan
 {
+    /// <summary>Actions that act on the app like a click, so a dialog they open matters.</summary>
+    public static readonly HashSet<string> ClickLike = new(StringComparer.Ordinal)
+    {
+        "click", "check", "uncheck", "expand", "collapse", "select", "set_value", "menu",
+    };
+
     public static readonly TimeSpan DefaultWaitTimeout = TimeSpan.FromSeconds(5);
 
     /// <summary>The step after <paramref name="index"/> waits for a dialog, so a dialog here is expected.</summary>

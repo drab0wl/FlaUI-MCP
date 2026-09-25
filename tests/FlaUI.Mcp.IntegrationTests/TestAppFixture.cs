@@ -37,6 +37,15 @@ public class TestAppFixture : IAsyncLifetime
     public PostActionSnapshotter CreatePostAction() =>
         new(Session, Elements, Dialogs, Pending, new PostActionOptions { MaxNodes = 150, MaxChars = 8000 });
 
+    public PlaywrightWindows.Mcp.Core.Batch.ElementFinder CreateFinder() => new(Session, Elements, Dialogs, Pending);
+
+    public SetTool CreateSetTool() => new(Elements, CreateFinder(), new StateActions(Clicks), CreatePostAction());
+
+    public MenuTool CreateMenuTool() =>
+        new(Session, Elements, CreateFinder(), new MenuActions(Session, Elements, Clicks), CreatePostAction());
+
+    public ReadTableTool CreateReadTableTool() => new(Elements, CreateFinder());
+
     public BatchTool CreateBatchTool(bool postSnapshot = true) =>
         new(Session, Elements, Clicks, Dialogs, Pending, postSnapshot ? CreatePostAction() : null);
 

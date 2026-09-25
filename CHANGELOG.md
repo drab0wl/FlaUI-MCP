@@ -8,6 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Forgiving names: selectors (batch, `windows_find`, the new tools), menu paths and options match loosely ("Save As" finds "Save &As...", shortcut text ignored), and a miss lists the closest names with refs.
+- `windows_set`: checked / expanded / selected / option / value, acting only if the state differs. Options open combo boxes when needed and realize virtualized list items. Also batch actions `check`, `uncheck`, `expand`, `collapse`, `select`, `set_value`.
+- `windows_menu`: invoke a menu command by path, including sub-menus and context menus; returns dialog handles like a click. Also batch action `menu`.
+- `windows_read_table`: grids, list views and tables as tab-separated rows with a ref per row, paged with `start` / `maxRows`.
+- Keyboard guard: typing and key presses are refused when the automated app isn't in the foreground (after trying to bring the target forward). `FLAUI_MCP_KEYBOARD_GUARD=0` turns it off.
+- Test app: WinForms menu bar, status bar and context menu.
 - Modal dialog handling. `windows_click` no longer hangs when a click opens a modal dialog: the UIA call runs on its own thread while a Win32 monitor watches the target process for new dialogs. The click returns as soon as a dialog appears, with the dialog's window handle, and becomes a pending operation (`op1`, ...) that finishes when the dialog closes.
 - `windows_click` `mode`: `auto` (default), `invoke` (UIA patterns only), `input` (real mouse click at the element's clickable point, bringing its window forward first and refusing if another app covers the point). `mode` is also accepted by `windows_batch` click actions.
 - Every tool result ends with a status block listing open modal/Win32 dialogs in the apps being automated, pending clicks, and clicks that finished since the last call.

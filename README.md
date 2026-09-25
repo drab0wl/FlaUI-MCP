@@ -136,6 +136,9 @@ Or using `dotnet run`:
 | `windows_dialog` | Read/press/type into/close a Win32 dialog without UI Automation; press results include a snapshot of what the app shows next |
 | `windows_wait` | Wait for a pending click to finish, or a dialog to open or close |
 | `windows_find` | Find elements by name / automation id / role and get their refs, without reading a whole snapshot |
+| `windows_set` | Make an element checked / expanded / selected, pick an option, or set a value; does nothing if it already is |
+| `windows_menu` | Choose a menu command by path (`File > Save As...`), including context menus |
+| `windows_read_table` | Read a grid, list view or table as tab-separated rows with a ref per row |
 
 `windows_screenshot` supports an optional `background: true` argument when a
 window `handle` is provided. This uses native background capture when available
@@ -214,6 +217,11 @@ selector: `name`, `nameContains`, `automationId`, `role` (as snapshots print it)
 | `type` | `text`; optional `ref` or selector to focus first |
 | `fill` | `ref` or selector; `value` |
 | `keys` | `keys` (array of chords like `Ctrl+Shift+B`, `Down`, `Enter`) or `chord`; optional `ref` or selector to focus first. A dialog it opens stops the batch like a click's |
+| `check` / `uncheck` | `ref` or selector; no-op if already so |
+| `expand` / `collapse` | `ref` or selector; no-op if already so |
+| `select` | `ref` or selector; `option` to pick an item inside it, or none to select the element itself |
+| `set_value` | `ref` or selector; `value` (number for sliders/spinners, text for text boxes) |
+| `menu` | `path` (`["File", "Save As..."]` or `"File > Save As..."`); optional `handle`, or a `ref` / selector for a context menu; `mode: "input"` to click items with the mouse |
 | `wait` | `ms`, or `until` + `timeoutMs` (default 5000): `dialog_open`, `dialog_closed` (`handle`, default the last dialog), `element` / `element_gone` (selector), `text_contains` (selector + `text`, case-insensitive) |
 | `snapshot` | optional `handle`; `compact` |
 | `dialog_press` | `button` (text, `c3` ref, or `ok`/`cancel`/`yes`/`no`/...); optional `handle` (default the last dialog) |
@@ -233,6 +241,7 @@ has a 24-second budget; if it runs out, the result says which action to continue
 | `FLAUI_MCP_SNAPSHOT_COMPACT` | `1` to make `compact: true` the default for `windows_snapshot` |
 | `FLAUI_MCP_SNAPSHOT_MODE` | `cached` (default), `subtree`, or `live` (the original per-property reads) |
 | `FLAUI_MCP_TIMING` | `0` to turn off the `[timing]` lines on stderr |
+| `FLAUI_MCP_KEYBOARD_GUARD` | `0` to let keyboard input go to whatever window is in the foreground |
 | `FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS` | Make UIA calls against a blocked provider fail after this long |
 
 ### Safety and Limitations
@@ -353,6 +362,51 @@ the number of calls:
   { "action": "wait", "until": "text_contains", "automationId": "StatusLabel", "handle": "w1", "text": "Deleted" }
 ] }
 ```
+
+**Say what you want, not how to click it.**
+
+- **Names are forgiving.** Selectors, menu paths and options match loosely: `"Save As"`
+  finds `"Save &As..."`, `"ok"` finds `"&OK"`, shortcut text is ignored. When nothing matches,
+  the error lists the closest names with refs, so a wrong guess costs no extra call:
+  `No element matches "Setings". Closest: button "Settings" [ref=w1e14].`
+- **`windows_set` puts an element into a state** and does nothing if it's already there, so
+  repeating it is safe (clicking a checkbox twice unchecks it):
+
+  ```json
+  { "name": "Word wrap", "checked": true }
+  { "name": "Status", "role": "combobox", "option": "Pending" }
+  { "name": "Volume", "value": 75 }
+  { "name": "Fruits", "role": "treeitem", "expanded": false }
+  ```
+
+  `option` opens a combo box if its items only exist while open, and asks virtualized lists
+  for items that aren't loaded. A missing option lists the ones that exist.
+- **`windows_menu` walks a menu path** in one call, including sub-menus and context menus
+  (pass a ref or selector to right-click that element first). If the command opens a dialog,
+  it returns with the dialog's handle like a click does:
+
+  ```json
+  { "path": "File > Recent > Report.txt" }
+  { "nameContains": "Report", "role": "listitem", "path": ["Delete"] }
+  ```
+
+- **`windows_read_table` reads grids as data:** headers, then one tab-separated line per row
+  starting with the row's ref. Page with `start` / `maxRows`.
+
+  ```
+  grid "Test Data" [ref=w1e30]: rows 1-3 of 50
+  ref	Select	ID	Name	Category
+  w1e31	False	ITEM-001	Test Item 1	Alpha
+  ```
+
+- **Keys only go to the app.** `windows_type`, `windows_send_keys`, keyboard fills and batch
+  `type` / `keys` check that the app being automated is in the foreground (bringing the target
+  element's window forward if needed) and refuse otherwise, so a stray focus change can't send
+  keystrokes into another program.
+
+All of these are also `windows_batch` actions: `check`, `uncheck`, `expand`, `collapse`,
+`select` (`option`), `set_value` (`value`) and `menu` (`path`). Like `click`, a dialog they open
+stops the batch unless the next action is `wait until=dialog_open`.
 
 **Faster snapshots.** Snapshots read each element's properties (name, automation id, control
 type, enabled/offscreen, pattern availability and toggle/selection/expand/read-only state)

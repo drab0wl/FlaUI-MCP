@@ -107,6 +107,37 @@ public sealed class ClickExecutor
         return Format(outcome) with { ProcessId = pid, WindowHwnd = windowHwnd, NewDialogs = outcome.NewDialogs };
     }
 
+    /// <summary>
+    /// Runs any UI Automation action on an element the way clicks run: on its own thread, raced
+    /// against dialog detection, so a pattern call that opens a modal dialog returns right away.
+    /// </summary>
+    /// <param name="verb">For messages: "expand", "select \"Blue\" in", ...</param>
+    /// <param name="action">Gets the element's name; returns the result text or throws.</param>
+    public async Task<ClickResult> RunAsync(AutomationElement element, string refId, string verb, Func<string, string> action, ActionRunOptions? options = null)
+    {
+        var pid = SafeGet(() => element.Properties.ProcessId.ValueOrDefault, 0, ProbeTimeout, out var answered);
+        if (!answered)
+        {
+            return Blocked(refId);
+        }
+
+        _sessions.TrackProcess(pid);
+        var name = SafeGet(() => element.Properties.Name.ValueOrDefault, null, ProbeTimeout, out _) ?? refId;
+        if (string.IsNullOrWhiteSpace(name)) name = refId;
+        var windowHwnd = WindowHwndForRef(refId);
+
+        var pids = new HashSet<int> { pid };
+        var baseline = _dialogs.GetDialogs(pids);
+        var outcome = await _runner.RunAsync(
+            $"{verb} \"{name}\"",
+            pid,
+            () => action(name),
+            () => DialogClassifier.NewSince(baseline, _dialogs.GetDialogs(pids)),
+            options);
+
+        return Format(outcome, "The action opened") with { ProcessId = pid, WindowHwnd = windowHwnd, NewDialogs = outcome.NewDialogs };
+    }
+
     private static bool HasActionPattern(AutomationElement element) =>
         element.Patterns.Invoke.IsSupported
         || element.Patterns.Toggle.IsSupported
@@ -202,7 +233,7 @@ public sealed class ClickExecutor
 
     private static nint HwndAt(Point p) => NativeMethods.WindowFromPoint(new NativeMethods.POINT { X = p.X, Y = p.Y });
 
-    private ClickResult Format(ActionOutcome outcome)
+    private ClickResult Format(ActionOutcome outcome, string openedLead = "The click opened")
     {
         var sb = new StringBuilder();
         switch (outcome.State)
@@ -212,7 +243,7 @@ public sealed class ClickExecutor
                 if (outcome.NewDialogs.Count > 0)
                 {
                     sb.AppendLine();
-                    AppendDialogs(sb, outcome.NewDialogs, "The click opened");
+                    AppendDialogs(sb, outcome.NewDialogs, openedLead);
                 }
                 return new ClickResult(sb.ToString(), false, outcome.NewDialogs.Count > 0, false);
 
@@ -227,7 +258,7 @@ public sealed class ClickExecutor
 
             case ActionState.DialogOpened:
                 var op = outcome.Operation!;
-                sb.AppendLine($"The {outcome.Description} opened a dialog. The app is waiting for it, so the click is pending as {op.Id}.");
+                sb.AppendLine($"The {outcome.Description} opened a dialog. The app is waiting for it, so the {Noun(outcome.Description)} is pending as {op.Id}.");
                 AppendDialogs(sb, outcome.NewDialogs, "Dialog");
                 sb.Append($"{op.Id} finishes when the dialog closes; tool results will report it, or call windows_wait with op={op.Id}.");
                 return new ClickResult(sb.ToString(), false, true, true);
@@ -239,6 +270,9 @@ public sealed class ClickExecutor
                 return new ClickResult(sb.ToString(), false, false, true);
         }
     }
+
+    private static string Noun(string description) =>
+        description.StartsWith("click", StringComparison.Ordinal) ? "click" : "action";
 
     private void AppendDialogs(StringBuilder sb, IReadOnlyList<DialogInfo> dialogs, string lead)
     {

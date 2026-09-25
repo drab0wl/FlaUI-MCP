@@ -21,6 +21,10 @@ var pendingOperations = new PendingOperationRegistry();
 var actionRunner = new ActionRunner(pendingOperations);
 var clickExecutor = new ClickExecutor(sessionManager, dialogMonitor, actionRunner, pendingOperations);
 var postAction = new PostActionSnapshotter(sessionManager, elementRegistry, dialogMonitor, pendingOperations);
+var elementFinder = new ElementFinder(sessionManager, elementRegistry, dialogMonitor, pendingOperations);
+var stateActions = new StateActions(clickExecutor);
+var menuActions = new MenuActions(sessionManager, elementRegistry, clickExecutor);
+var keyboardGuard = new KeyboardGuard(sessionManager);
 
 // Every tool result reports open dialogs and clicks that finished in the background.
 var annotator = new SessionStatusAnnotator(sessionManager, dialogMonitor, pendingOperations);
@@ -30,10 +34,10 @@ var toolRegistry = new ToolRegistry(annotator: annotator);
 toolRegistry.RegisterTool(new LaunchTool(sessionManager));
 toolRegistry.RegisterTool(new SnapshotTool(sessionManager, elementRegistry, pendingOperations));
 toolRegistry.RegisterTool(new ClickTool(elementRegistry, clickExecutor, postAction));
-toolRegistry.RegisterTool(new TypeTool(elementRegistry));
-toolRegistry.RegisterTool(new FillTool(elementRegistry, postAction));
+toolRegistry.RegisterTool(new TypeTool(elementRegistry, keyboardGuard));
+toolRegistry.RegisterTool(new FillTool(elementRegistry, postAction, keyboardGuard));
 toolRegistry.RegisterTool(new GetTextTool(elementRegistry));
-toolRegistry.RegisterTool(new SendKeysTool(elementRegistry));
+toolRegistry.RegisterTool(new SendKeysTool(elementRegistry, keyboardGuard));
 toolRegistry.RegisterTool(new ScreenshotTool(sessionManager, elementRegistry));
 toolRegistry.RegisterTool(new ListWindowsTool(sessionManager));
 toolRegistry.RegisterTool(new FocusWindowTool(sessionManager));
@@ -42,7 +46,10 @@ toolRegistry.RegisterTool(new BatchTool(sessionManager, elementRegistry, clickEx
 toolRegistry.RegisterTool(new DialogsTool(sessionManager, dialogMonitor, pendingOperations));
 toolRegistry.RegisterTool(new NativeDialogTool(sessionManager, postAction));
 toolRegistry.RegisterTool(new WaitTool(sessionManager, dialogMonitor, pendingOperations));
-toolRegistry.RegisterTool(new FindTool(new ElementFinder(sessionManager, elementRegistry, dialogMonitor, pendingOperations)));
+toolRegistry.RegisterTool(new FindTool(elementFinder));
+toolRegistry.RegisterTool(new SetTool(elementRegistry, elementFinder, stateActions, postAction));
+toolRegistry.RegisterTool(new MenuTool(sessionManager, elementRegistry, elementFinder, menuActions, postAction));
+toolRegistry.RegisterTool(new ReadTableTool(elementRegistry, elementFinder));
 
 // Create and run MCP server
 var server = new McpServer(toolRegistry);
