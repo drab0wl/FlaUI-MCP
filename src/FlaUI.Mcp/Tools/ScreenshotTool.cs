@@ -1,6 +1,7 @@
 using System.Text.Json;
 using FlaUI.Core.Capturing;
 using PlaywrightWindows.Mcp.Core;
+using PlaywrightWindows.Mcp.Core.Win32;
 
 namespace PlaywrightWindows.Mcp.Tools;
 
@@ -96,6 +97,13 @@ public class ScreenshotTool : ToolBase
                     return Task.FromResult(ErrorResult($"Element not found: {refId}"));
                 }
                 capture = Capture.Element(element);
+            }
+            else if (!string.IsNullOrEmpty(handle) && !background
+                     && TryGetNativeBounds(_sessionManager.GetHwnd(handle), out var bounds))
+            {
+                // Screen-rectangle capture from the HWND: no UI Automation involved, so this
+                // still works when a dialog has the app's UIA provider blocked.
+                capture = Capture.Rectangle(bounds);
             }
             else if (!string.IsNullOrEmpty(handle))
             {
@@ -199,6 +207,18 @@ public class ScreenshotTool : ToolBase
 
         normalizedPath = fullPath;
         return true;
+    }
+
+    private static bool TryGetNativeBounds(nint hwnd, out System.Drawing.Rectangle bounds)
+    {
+        bounds = default;
+        if (hwnd == 0 || !NativeMethods.IsWindowVisible(hwnd) || NativeMethods.IsIconic(hwnd)
+            || !NativeMethods.GetWindowRect(hwnd, out var r))
+        {
+            return false;
+        }
+        bounds = System.Drawing.Rectangle.FromLTRB(r.Left, r.Top, r.Right, r.Bottom);
+        return bounds.Width > 0 && bounds.Height > 0;
     }
 
     private static McpToolResult BuildScreenshotResult(byte[] imageData, string? savePath, bool overwrite)

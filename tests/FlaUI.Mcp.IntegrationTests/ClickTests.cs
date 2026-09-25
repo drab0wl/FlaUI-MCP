@@ -26,7 +26,7 @@ public class ClickTests
         Assert.NotNull(buttonRef);
         _output.WriteLine($"Click Me button ref: {buttonRef}");
 
-        var tool = new ClickTool(_fixture.Elements);
+        var tool = _fixture.CreateClickTool();
         var result = await _fixture.CallTool(tool, new { @ref = buttonRef });
         _output.WriteLine($"Result: {result}");
         Assert.Contains("Invoked", result);
@@ -38,7 +38,7 @@ public class ClickTests
         var cbRef = _fixture.FindRefByName(_fixture.WinFormsHandle, "Enable the button below");
         Assert.NotNull(cbRef);
 
-        var tool = new ClickTool(_fixture.Elements);
+        var tool = _fixture.CreateClickTool();
         var result = await _fixture.CallTool(tool, new { @ref = cbRef });
         _output.WriteLine($"Result: {result}");
         // WinForms checkboxes support InvokePattern, so ClickTool uses Invoke (not Toggle)
@@ -68,7 +68,7 @@ public class ClickTests
         Assert.Contains("disabled", snapshot1.Split('\n').First(l => l.Contains("Conditional Button")));
 
         // Click the checkbox to enable the button
-        var clickTool = new ClickTool(_fixture.Elements);
+        var clickTool = _fixture.CreateClickTool();
         await _fixture.CallTool(clickTool, new { @ref = cbRef });
 
         // Poll for the button to become enabled
@@ -106,7 +106,7 @@ public class ClickTests
         Assert.NotNull(buttonRef);
         _output.WriteLine($"Click Me button ref: {buttonRef}");
 
-        var tool = new ClickTool(_fixture.Elements);
+        var tool = _fixture.CreateClickTool();
         var result = await _fixture.CallTool(tool, new { @ref = buttonRef });
         _output.WriteLine($"Result: {result}");
         Assert.Contains("Invoked", result);

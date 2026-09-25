@@ -28,6 +28,53 @@ namespace WpfTestApp
             ConditionalButton.IsEnabled = EnableCheckbox.IsChecked == true;
         }
 
+        // Dialogs tab
+        private void ShowMessageBox_Click(object sender, RoutedEventArgs e)
+        {
+            var result = MessageBox.Show(this, "Discard unsaved changes?", "Confirm Discard",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning);
+            DialogStatusLabel.Text = $"MessageBox result: {result}";
+        }
+
+        private void OpenWpfDialog_Click(object sender, RoutedEventArgs e)
+        {
+            var nameBox = new System.Windows.Controls.TextBox { Margin = new Thickness(0, 0, 0, 10) };
+            System.Windows.Automation.AutomationProperties.SetAutomationId(nameBox, "DialogNameInput");
+            System.Windows.Automation.AutomationProperties.SetName(nameBox, "Your name");
+
+            var dialog = new Window
+            {
+                Title = "WPF Test Dialog",
+                Owner = this,
+                Width = 320,
+                Height = 180,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                ResizeMode = ResizeMode.NoResize,
+                ShowInTaskbar = false,
+            };
+
+            var ok = new System.Windows.Controls.Button { Content = "OK", IsDefault = true, Width = 80, Margin = new Thickness(0, 0, 8, 0) };
+            ok.Click += (_, _) => dialog.DialogResult = true;
+            var cancel = new System.Windows.Controls.Button { Content = "Cancel", IsCancel = true, Width = 80 };
+
+            var buttons = new System.Windows.Controls.StackPanel
+            {
+                Orientation = System.Windows.Controls.Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+            };
+            buttons.Children.Add(ok);
+            buttons.Children.Add(cancel);
+
+            var root = new System.Windows.Controls.StackPanel { Margin = new Thickness(12) };
+            root.Children.Add(new System.Windows.Controls.TextBlock { Text = "Enter a name:", Margin = new Thickness(0, 0, 0, 4) });
+            root.Children.Add(nameBox);
+            root.Children.Add(buttons);
+            dialog.Content = root;
+
+            var accepted = dialog.ShowDialog() == true;
+            DialogStatusLabel.Text = accepted ? $"WPF dialog result: OK name={nameBox.Text}" : "WPF dialog result: Cancel";
+        }
+
         // Grid tab
         private void LoadGridData()
         {

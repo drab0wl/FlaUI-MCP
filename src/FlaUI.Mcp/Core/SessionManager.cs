@@ -1,6 +1,7 @@
 using FlaUI.Core;
 using FlaUI.Core.AutomationElements;
 using FlaUI.UIA3;
+using PlaywrightWindows.Mcp.Core.Win32;
 using FlaUIApplication = FlaUI.Core.Application;
 
 namespace PlaywrightWindows.Mcp.Core;
@@ -13,11 +14,25 @@ public class SessionManager : IDisposable
     private readonly UIA3Automation _automation;
     private readonly Dictionary<string, FlaUIApplication> _applications = new();
     private readonly Dictionary<string, Window> _windows = new();
+    // Handles registered from a raw HWND (e.g. a dialog found by the Win32 monitor) and
+    // resolved to a UIA Window only when a UIA tool needs it.
+    private readonly Dictionary<string, nint> _handleToHwnd = new();
+    private readonly Dictionary<nint, string> _hwndToHandle = new();
+    private readonly HashSet<int> _trackedProcessIds = new();
+    private readonly object _gate = new();
     private int _windowCounter = 0;
 
     public SessionManager()
     {
         _automation = new UIA3Automation();
+
+        // Opt-in: make UIA calls against a blocked provider fail fast instead of waiting the
+        // UIA default (20s). Off by default because it also caps legitimately slow calls.
+        var timeout = Environment.GetEnvironmentVariable("FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS");
+        if (int.TryParse(timeout, out var ms) && ms > 0)
+        {
+            _automation.TransactionTimeout = TimeSpan.FromMilliseconds(ms);
+        }
     }
 
     public UIA3Automation Automation => _automation;
@@ -113,16 +128,102 @@ public class SessionManager : IDisposable
         return (handle, window);
     }
 
-    public string RegisterWindow(Window window)
+    /// <param name="track">
+    /// Report this window's process's dialogs in tool results. False for bulk listings, so
+    /// listing the desktop doesn't start reporting every app's dialogs.
+    /// </param>
+    public string RegisterWindow(Window window, bool track = true)
     {
-        var handle = $"w{++_windowCounter}";
-        _windows[handle] = window;
-        return handle;
+        nint hwnd = 0;
+        int pid = 0;
+        try { hwnd = window.Properties.NativeWindowHandle.ValueOrDefault; } catch { }
+        try { pid = window.Properties.ProcessId.ValueOrDefault; } catch { }
+
+        lock (_gate)
+        {
+            if (track && pid != 0) _trackedProcessIds.Add(pid);
+
+            // Same HWND -> same handle, so repeated list/snapshot calls don't mint new handles.
+            if (hwnd != 0 && _hwndToHandle.TryGetValue(hwnd, out var existing))
+            {
+                _windows[existing] = window;
+                return existing;
+            }
+
+            var handle = $"w{++_windowCounter}";
+            _windows[handle] = window;
+            if (hwnd != 0)
+            {
+                _hwndToHandle[hwnd] = handle;
+                _handleToHwnd[handle] = hwnd;
+            }
+            return handle;
+        }
+    }
+
+    /// <summary>
+    /// Register a top-level window by HWND without touching UI Automation. The UIA element is
+    /// created on first use, so this is safe to call while the app's UIA provider is blocked.
+    /// </summary>
+    public string RegisterNativeWindow(nint hwnd, int processId, bool track = true)
+    {
+        lock (_gate)
+        {
+            if (track && processId != 0) _trackedProcessIds.Add(processId);
+            if (_hwndToHandle.TryGetValue(hwnd, out var existing)) return existing;
+
+            var handle = $"w{++_windowCounter}";
+            _hwndToHandle[hwnd] = handle;
+            _handleToHwnd[handle] = hwnd;
+            return handle;
+        }
     }
 
     public Window? GetWindow(string handle)
     {
-        return _windows.TryGetValue(handle, out var window) ? window : null;
+        nint hwnd;
+        lock (_gate)
+        {
+            _handleToHwnd.TryGetValue(handle, out hwnd);
+            if (hwnd != 0)
+            {
+                // Using a handle means the agent is working with that app: report its dialogs.
+                var pid = NativeMethods.GetProcessId(hwnd);
+                if (pid != 0) _trackedProcessIds.Add(pid);
+            }
+            if (_windows.TryGetValue(handle, out var window)) return window;
+            if (hwnd == 0) return null;
+        }
+
+        if (!NativeMethods.IsWindow(hwnd)) return null;
+        var resolved = _automation.FromHandle(hwnd).AsWindow();
+        if (resolved == null) return null;
+        lock (_gate) _windows[handle] = resolved;
+        return resolved;
+    }
+
+    /// <summary>The HWND behind a handle, if known. Never calls UI Automation.</summary>
+    public nint GetHwnd(string handle)
+    {
+        lock (_gate)
+        {
+            return _handleToHwnd.TryGetValue(handle, out var hwnd) ? hwnd : 0;
+        }
+    }
+
+    /// <summary>Remember a process so its dialogs are reported in tool results.</summary>
+    public void TrackProcess(int processId)
+    {
+        if (processId == 0) return;
+        lock (_gate) _trackedProcessIds.Add(processId);
+    }
+
+    public IReadOnlySet<int> TrackedProcessIds
+    {
+        get
+        {
+            lock (_gate) return new HashSet<int>(_trackedProcessIds);
+        }
     }
 
     public List<(string handle, string title, string? processName)> ListWindows()
@@ -136,7 +237,7 @@ public class SessionManager : IDisposable
             var window = w.AsWindow();
             if (window != null && !string.IsNullOrEmpty(window.Title))
             {
-                var handle = RegisterWindow(window);
+                var handle = RegisterWindow(window, track: false);
                 string? processName = null;
                 try 
                 { 
@@ -170,7 +271,11 @@ public class SessionManager : IDisposable
             throw new Exception($"Window not found: {handle}");
         }
         window.Close();
-        _windows.Remove(handle);
+        lock (_gate)
+        {
+            _windows.Remove(handle);
+            if (_handleToHwnd.Remove(handle, out var hwnd)) _hwndToHandle.Remove(hwnd);
+        }
     }
 
     public void Dispose()
@@ -180,7 +285,12 @@ public class SessionManager : IDisposable
             try { app.Close(); } catch { }
         }
         _applications.Clear();
-        _windows.Clear();
+        lock (_gate)
+        {
+            _windows.Clear();
+            _handleToHwnd.Clear();
+            _hwndToHandle.Clear();
+        }
         _automation.Dispose();
     }
 }

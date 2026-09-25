@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Modal dialog handling. `windows_click` no longer hangs when a click opens a modal dialog: the UIA call runs on its own thread while a Win32 monitor watches the target process for new dialogs. The click returns as soon as a dialog appears, with the dialog's window handle, and becomes a pending operation (`op1`, ...) that finishes when the dialog closes.
+- `windows_click` `mode`: `auto` (default), `invoke` (UIA patterns only), `input` (real mouse click at the element's clickable point, bringing its window forward first and refusing if another app covers the point). `mode` is also accepted by `windows_batch` click actions.
+- Every tool result ends with a status block listing open modal/Win32 dialogs in the apps being automated, pending clicks, and clicks that finished since the last call.
+- `windows_dialogs`: list dialogs (Win32 only, works while UIA is blocked).
+- `windows_dialog`: read, press buttons, set edit text, or close HWND-based dialogs (MessageBox, `#32770`, WinForms) with window messages, bypassing UI Automation.
+- `windows_wait`: wait for a pending click to finish, a dialog to open, or a dialog to close.
+- `FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS` environment variable to cap UIA call time.
+- Action results include post-action state: `windows_click`, `windows_fill`, `windows_dialog` press and `windows_batch` append a bounded snapshot of the dialog the action opened, or the app's foreground window. `postSnapshot: false` or `FLAUI_MCP_POST_SNAPSHOT=0` turns it off; `FLAUI_MCP_POST_SNAPSHOT_MAX_NODES` / `_MAX_CHARS` bound it.
+- `windows_batch` selectors (`name`, `nameContains`, `automationId`, `role`, `handle`, `index`), condition waits (`until`: `dialog_open`, `dialog_closed`, `element`, `element_gone`, `text_contains`), and `dialog_press` / `dialog_set_text` actions. A click followed by `wait until=dialog_open` no longer stops the batch.
+- Post-action results list what changed (added / removed / changed elements, with refs) when the window has been snapshotted before, instead of repeating its first 150 elements. `FLAUI_MCP_POST_SNAPSHOT_DIFF=0` turns this off.
+- `windows_find`: search by name / nameContains / automationId / role and get refs plus each match's named ancestors, without a full snapshot.
+- `windows_snapshot` `ref` (snapshot one element's subtree; other refs stay valid), `depth`, and `compact` (hide offscreen elements and unnamed single-child groups; `FLAUI_MCP_SNAPSHOT_COMPACT=1` makes it the default). Post-action snapshots are always compact.
+- `windows_batch` `keys` action (chords such as `Ctrl+Shift+B`); like a click, a dialog it opens stops the batch unless the next action waits for one.
+- `settleMs` on `windows_click`, and `noDialog` / `settleMs` on batch clicks, to skip or shorten the 250 ms dialog-settle wait.
+- Per-tool timing on stderr (`[timing] ...`: execution, status-block time, and the gap between calls), with a periodic per-tool summary. `FLAUI_MCP_TIMING=0` disables it.
+- `FlaUI.Mcp.exe --bench-snapshot "<title>"` compares snapshot modes on a live window.
+- Test apps: MessageBox and input-bearing modal dialogs (WinForms and WPF); `ModalDialogTests` integration tests; unit tests for dialog classification, the action runner, the status block and Win32 button matching.
+
+### Changed
+- `windows_batch` stops after a click that opens a dialog or doesn't return, instead of running later actions against a blocked app.
+- `windows_snapshot` fails fast with guidance, rather than timing out, when a pending click is holding the app's UIA provider.
+- `windows_screenshot` with a window handle captures the window's screen rectangle from its HWND, so it works while UIA is blocked.
+- Window handles are stable: registering the same window again returns the same handle.
+- Snapshots read element properties through a UIA `CacheRequest` (one call per element's children instead of about ten per element). `FLAUI_MCP_SNAPSHOT_MODE=live|cached|subtree` picks the strategy.
+- Element refs are stable across snapshots: an element seen in the previous snapshot of a window keeps its ref (matched by runtime id), and a bounded snapshot keeps the refs it didn't reach.
+
 ## [0.2.0] - 2026-07-08
 
 ### Fixed

@@ -405,6 +405,29 @@ namespace WinFormsTestApp
             };
             tab.Controls.Add(layout);
 
+            // Status text that updates (created first so the handlers below can write to it)
+            var statusLabel = new Label
+            {
+                Text = "Ready",
+                Name = "DialogStatusLabel",
+                AutoSize = true
+            };
+
+            // Button that opens a Win32 MessageBox (#32770) from inside the click handler
+            var messageBoxButton = new Button
+            {
+                Text = "Show Message Box",
+                Name = "ShowMessageBoxButton",
+                AutoSize = true
+            };
+            messageBoxButton.Click += (s, e) =>
+            {
+                var result = MessageBox.Show(this, "Delete the selected item?", "Confirm Delete",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                statusLabel.Text = $"MessageBox result: {result}";
+            };
+            layout.Controls.Add(messageBoxButton);
+
             // Button that opens a modal dialog
             var modalButton = new Button
             {
@@ -431,7 +454,23 @@ namespace WinFormsTestApp
                     DialogResult = DialogResult.OK,
                     Location = new Point(100, 120)
                 };
+                var cancelButton = new Button
+                {
+                    Text = "Cancel",
+                    Name = "CancelButton",
+                    DialogResult = DialogResult.Cancel,
+                    Location = new Point(185, 120)
+                };
+                var nameInput = new TextBox
+                {
+                    Name = "NameInput",
+                    AccessibleName = "Your name",
+                    Location = new Point(20, 70),
+                    Width = 240
+                };
                 dialog.Controls.Add(okButton);
+                dialog.Controls.Add(cancelButton);
+                dialog.Controls.Add(nameInput);
                 dialog.Controls.Add(new Label
                 {
                     Text = "This is a test modal dialog.",
@@ -440,7 +479,9 @@ namespace WinFormsTestApp
                     AutoSize = true
                 });
                 dialog.AcceptButton = okButton;
-                dialog.ShowDialog(this);
+                dialog.CancelButton = cancelButton;
+                var result = dialog.ShowDialog(this);
+                statusLabel.Text = $"Modal result: {result} name={nameInput.Text}";
             };
             layout.Controls.Add(modalButton);
 
@@ -479,13 +520,6 @@ namespace WinFormsTestApp
             };
             layout.Controls.Add(modelessButton);
 
-            // Status text that updates
-            var statusLabel = new Label
-            {
-                Text = "Ready",
-                Name = "DialogStatusLabel",
-                AutoSize = true
-            };
             layout.Controls.Add(new Label { Text = "", AutoSize = true }); // spacer
             layout.Controls.Add(statusLabel);
 

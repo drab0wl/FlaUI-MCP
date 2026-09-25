@@ -47,6 +47,26 @@ Agent: Calculate 3 × 3
      5. snapshot: ... "Display is 9" ...
 ```
 
+Refs aren't required: `windows_batch` can find elements itself, so a flow can run without
+a snapshot first, and action results end with a snapshot of what the app shows next:
+
+```
+windows_batch { "actions": [
+  {"action": "click", "name": "Three", "role": "button", "handle": "w1", "noDialog": true},
+  {"action": "click", "name": "Multiply by", "handle": "w1", "noDialog": true},
+  {"action": "click", "name": "Three", "role": "button", "handle": "w1", "noDialog": true},
+  {"action": "click", "name": "Equals", "handle": "w1", "noDialog": true},
+  {"action": "wait", "until": "text_contains", "nameContains": "Display is", "handle": "w1", "text": "9"}
+]}
+→ 1. click: button "Three" in w1 -> w1e43: Invoked Three
+  ...
+  5. wait: name*="Display is" in w1 (w1e15) text contains "9"
+
+  --- after batch: foreground window w1 "Calculator" ---
+  - window "Calculator" [ref=w1e1]
+    ...
+```
+
 ## Installation
 
 ### Prerequisites
@@ -101,17 +121,21 @@ Or using `dotnet run`:
 | Tool | Description |
 |------|-------------|
 | `windows_launch` | Launch a Windows application |
-| `windows_snapshot` | Get accessibility tree with element refs |
-| `windows_click` | Click an element by ref |
+| `windows_snapshot` | Get accessibility tree with element refs (refs stay the same across snapshots for unchanged elements); `ref` for one part, `depth`, `compact` |
+| `windows_click` | Click an element by ref; never hangs on a modal dialog; result includes a snapshot of what opened |
 | `windows_type` | Type text into an element |
 | `windows_send_keys` | Send key presses or key chords (for example `Ctrl+A`) |
-| `windows_fill` | Clear and fill a text field |
+| `windows_fill` | Clear and fill a text field; result includes a snapshot of the app |
 | `windows_get_text` | Get text content of an element |
 | `windows_screenshot` | Capture window/element as PNG |
 | `windows_list_windows` | List all open windows |
 | `windows_focus` | Bring a window to foreground |
 | `windows_close` | Close a window |
-| `windows_batch` | Execute multiple actions in one call |
+| `windows_batch` | Execute multiple actions in one call: refs or selectors, condition waits, dialog actions |
+| `windows_dialogs` | List open dialogs and pending clicks (Win32, works while UIA is blocked) |
+| `windows_dialog` | Read/press/type into/close a Win32 dialog without UI Automation; press results include a snapshot of what the app shows next |
+| `windows_wait` | Wait for a pending click to finish, or a dialog to open or close |
+| `windows_find` | Find elements by name / automation id / role and get their refs, without reading a whole snapshot |
 
 `windows_screenshot` supports an optional `background: true` argument when a
 window `handle` is provided. This uses native background capture when available
@@ -169,6 +193,48 @@ Replace an existing screenshot file explicitly:
 }
 ```
 
+Run a whole dialog flow in one `windows_batch` call. Each action targets a `ref` or a
+selector: `name`, `nameContains`, `automationId`, `role` (as snapshots print it), plus
+`handle` for the window to search and `index` when several elements match:
+
+```json
+{
+  "actions": [
+    { "action": "click", "name": "Delete", "role": "button", "handle": "w1" },
+    { "action": "wait", "until": "dialog_open" },
+    { "action": "dialog_press", "button": "yes" },
+    { "action": "wait", "until": "text_contains", "automationId": "StatusLabel", "handle": "w1", "text": "Deleted" }
+  ]
+}
+```
+
+| Batch action | Fields |
+|--------------|--------|
+| `click` | `ref` or selector; `mode` (`auto`/`invoke`/`input`); `noDialog: true` or `settleMs` to skip/shorten the 250 ms dialog watch |
+| `type` | `text`; optional `ref` or selector to focus first |
+| `fill` | `ref` or selector; `value` |
+| `keys` | `keys` (array of chords like `Ctrl+Shift+B`, `Down`, `Enter`) or `chord`; optional `ref` or selector to focus first. A dialog it opens stops the batch like a click's |
+| `wait` | `ms`, or `until` + `timeoutMs` (default 5000): `dialog_open`, `dialog_closed` (`handle`, default the last dialog), `element` / `element_gone` (selector), `text_contains` (selector + `text`, case-insensitive) |
+| `snapshot` | optional `handle`; `compact` |
+| `dialog_press` | `button` (text, `c3` ref, or `ok`/`cancel`/`yes`/`no`/...); optional `handle` (default the last dialog) |
+| `dialog_set_text` | `text`; optional `control` (`c4`, default the first edit box) and `handle` |
+
+`handle: "$dialog"` in a selector means the dialog the batch last saw open. A click that opens
+a dialog stops the batch unless the next action is `wait` with `until: "dialog_open"`. A batch
+has a 24-second budget; if it runs out, the result says which action to continue from.
+
+### Configuration
+
+| Environment variable | Effect |
+|----------------------|--------|
+| `FLAUI_MCP_POST_SNAPSHOT` | `0` to leave the post-action snapshot off unless a call asks for it (`postSnapshot: true`) |
+| `FLAUI_MCP_POST_SNAPSHOT_MAX_NODES` / `_MAX_CHARS` | Bounds for the post-action snapshot (default 150 elements / 8000 characters) |
+| `FLAUI_MCP_POST_SNAPSHOT_DIFF` | `0` to always show a snapshot after actions, never a list of changes |
+| `FLAUI_MCP_SNAPSHOT_COMPACT` | `1` to make `compact: true` the default for `windows_snapshot` |
+| `FLAUI_MCP_SNAPSHOT_MODE` | `cached` (default), `subtree`, or `live` (the original per-property reads) |
+| `FLAUI_MCP_TIMING` | `0` to turn off the `[timing]` lines on stderr |
+| `FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS` | Make UIA calls against a blocked provider fail after this long |
+
 ### Safety and Limitations
 
 - Keyboard input is focus-dependent. When you use `windows_send_keys`, the tool
@@ -184,6 +250,132 @@ Replace an existing screenshot file explicitly:
 - A timeout error means the MCP request returned, but a blocked Windows UI
   Automation provider or modal dialog may still need to be dismissed before
   retrying the operation.
+
+## Modal Dialogs
+
+UI Automation pattern calls are synchronous. When a click handler calls `ShowDialog()` or
+`MessageBox.Show()`, providers that run the handler inline (WinForms, Win32) don't return
+from `Invoke()` until the dialog closes. A naive client hangs.
+
+FlaUI-MCP handles this:
+
+- **Clicks never hang.** `windows_click` runs the UIA call on its own thread while a Win32
+  monitor (`EnumWindows`, filtered to the target process) watches for new dialogs. When one
+  appears, the tool returns immediately with the dialog's handle, and the click becomes a
+  pending operation that finishes when the dialog closes.
+- **Every result carries status.** Any tool's result ends with the open dialogs, pending
+  clicks, and clicks that finished since the last call, so the agent can't miss a dialog.
+- **Dialogs are ordinary windows.** Snapshot one with `windows_snapshot handle=w7` and act on
+  its refs like any other window.
+- **`mode=input` avoids the problem.** A real mouse click leaves no UIA call outstanding, so
+  the dialog's UIA tree is fully usable. It needs the window visible and an unlocked session.
+  The click is refused if another app covers the target point.
+- **A Win32 fallback for when UIA is blocked.** `windows_dialog` reads a classic dialog's
+  controls and presses buttons with window messages (`WM_COMMAND`/`BM_CLICK`,
+  `WM_SETTEXT`), so it works even while the app's provider is stuck. It handles MessageBox,
+  `#32770` dialogs and WinForms forms. WPF and task-dialog content has no child HWNDs, so
+  use `windows_snapshot` for those.
+
+```
+1. windows_click { "ref": "w1e12" }
+   → The click "Delete" (pattern) opened a dialog. The app is waiting for it, so the
+     click is pending as op1.
+     Dialog: w4 "Confirm Delete" [modal] [win32]
+2. windows_dialog { "handle": "w4" }
+   → - c1 text "Delete the selected item?"
+     - c2 button "&Yes" [default] id=6
+     - c3 button "&No" id=7
+3. windows_dialog { "handle": "w4", "action": "press", "button": "yes" }
+   → Pressed c2 "&Yes" in w4. The dialog closed.
+     --- status ---
+     Finished since last call:
+     - op1: click "Delete" (pattern) -> Invoked Delete
+```
+
+Set `FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS` (for example `5000`) to make UIA calls against a
+blocked provider fail after that long instead of the UIA default.
+
+## Fewer Round Trips
+
+Driving an app one tool call at a time is slow: each step costs a model turn. FlaUI-MCP cuts
+the number of calls:
+
+- **Action results show what happened.** `windows_click`, `windows_fill`, `windows_dialog`
+  `action=press` and `windows_batch` end with the state of the window you'll most likely act
+  on next: the dialog the action opened, else the app's foreground window. If you've seen that
+  window before, you get only what changed, with refs:
+
+  ```
+  --- after click: foreground window w1 "Editor" (changes: 1 added, 1 removed, 1 changed) ---
+  added:
+    in group "Find" [ref=w1e20]:
+      - text "3 matches" [ref=w1e412]
+  removed:
+    - text "Searching..." [ref=w1e409]
+  changed:
+    - button "Next" [ref=w1e22]  (was: button "Next" [ref=w1e22] [disabled])
+  ```
+
+  Otherwise (a new dialog, or a window never snapshotted) you get a compact snapshot, capped at
+  150 elements / 8000 characters. Refs from earlier snapshots stay valid either way. Pass
+  `postSnapshot: false` to skip it; set `FLAUI_MCP_POST_SNAPSHOT=0` to make that the default.
+  While a pending click blocks the app's UI Automation, you get the dialog's Win32 controls.
+- **Search instead of reading.** On big windows (IDEs, Office) a full snapshot is thousands of
+  lines. `windows_find` returns just the matches, each with the named elements it's inside:
+
+  ```
+  windows_find { "nameContains": "Build", "role": "menuitem" }
+  → in w1:
+    - menuitem "Build Solution" [ref=w1e88]  (in menubar "MenuBar" > menuitem "Build")
+  ```
+
+  `windows_snapshot` takes `ref` to read one part of a window (refs elsewhere stay valid),
+  `depth` to stop early, and `compact: true` to leave out offscreen elements and unnamed
+  groups that only wrap one element.
+- **`windows_batch` finds elements itself.** Actions can target `name`, `nameContains`,
+  `automationId` and `role` (as printed in snapshots) instead of a ref, optionally limited to a
+  window with `handle` (`"$dialog"` is the dialog the batch last saw open). Waits can be for a
+  condition: `until` = `dialog_open`, `dialog_closed`, `element`, `element_gone`,
+  `text_contains`. `dialog_press` and `dialog_set_text` drive a dialog with Win32 messages.
+  `keys` sends chords (`["Ctrl+Shift+B"]`) to the focused element or a ref/selector.
+- **Expected dialogs don't stop a batch.** A click that opens a dialog still stops the batch,
+  unless the next action is `wait` with `until: "dialog_open"`.
+- **No settle wait when there's nothing to wait for.** Clicks watch for a dialog for 250 ms
+  after returning. `noDialog: true` (or `settleMs`) on a batch click, or `settleMs` on
+  `windows_click`, skips or shortens that; a click followed by `until: "dialog_open"` skips it.
+
+```json
+{ "actions": [
+  { "action": "click", "role": "tab", "name": "Dialogs", "handle": "w1", "noDialog": true },
+  { "action": "click", "name": "Delete", "role": "button", "handle": "w1" },
+  { "action": "wait", "until": "dialog_open" },
+  { "action": "dialog_press", "button": "yes" },
+  { "action": "wait", "until": "text_contains", "automationId": "StatusLabel", "handle": "w1", "text": "Deleted" }
+] }
+```
+
+**Faster snapshots.** Snapshots read each element's properties (name, automation id, control
+type, enabled/offscreen, pattern availability and toggle/selection/expand/read-only state)
+through a UI Automation `CacheRequest`, so each element's children arrive with all their
+properties in one cross-process call instead of about ten. `FLAUI_MCP_SNAPSHOT_MODE` picks
+`cached` (default), `subtree` (the whole tree in one call; can't stop early at the element
+limit) or `live` (the original per-property reads).
+
+**Measuring.** Each tool call writes a line to stderr (never stdout, the MCP channel):
+
+```
+[timing] snapshot 412ms handle=w1 mode=Cached nodes=812
+[timing] tool=windows_snapshot exec=415ms status=2ms gap=6120ms
+```
+
+`exec` is the tool's own time, `status` is the status-block scan, and `gap` is the time since
+the previous result was returned: the model's turn. A per-tool summary is written every 20
+calls and at exit. `FLAUI_MCP_TIMING=0` turns it off. To compare snapshot modes on a real
+window:
+
+```powershell
+FlaUI.Mcp.exe --bench-snapshot "Visual Studio" 5
+```
 
 ## How It Works
 
@@ -251,8 +443,9 @@ dotnet test tests\FlaUI.Mcp.IntegrationTests
 ┌─────────────────────────────────────────────────────────────────┐
 │  FlaUI-MCP Server (.NET 8)                                      │
 │  - Implements MCP tool handlers                                 │
-│  - Builds agent-friendly accessibility snapshots                │
-│  - Maps element refs ↔ AutomationElements                       │
+│  - Builds agent-friendly accessibility snapshots (CacheRequest) │
+│  - Maps element refs ↔ AutomationElements (stable across calls) │
+│  - Finds elements by selector; watches for dialogs with Win32   │
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼

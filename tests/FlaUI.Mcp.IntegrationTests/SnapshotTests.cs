@@ -72,7 +72,7 @@ public class SnapshotTests
         var tabRef = TestAppFixture.FindRefInSnapshot(snapshot, "Buttons");
         if (tabRef != null)
         {
-            var clickTool = new ClickTool(_fixture.Elements);
+            var clickTool = _fixture.CreateClickTool();
             await _fixture.CallTool(clickTool, new { @ref = tabRef });
             await Task.Delay(100);
         }
@@ -91,7 +91,7 @@ public class SnapshotTests
 
         Assert.NotNull(gridTabRef);
 
-        var clickTool = new ClickTool(_fixture.Elements);
+        var clickTool = _fixture.CreateClickTool();
         await _fixture.CallTool(clickTool, new { @ref = gridTabRef });
 
         // Poll for grid content to appear after tab switch
@@ -107,5 +107,55 @@ public class SnapshotTests
 
         _output.WriteLine(snapshot2[..Math.Min(2000, snapshot2.Length)]);
         Assert.Contains("Test Data", snapshot2);
+    }
+
+    [Theory]
+    [InlineData("winforms")]
+    [InlineData("wpf")]
+    public void CachedSnapshots_MatchTheOriginalLiveWalk(string app)
+    {
+        var handle = app == "winforms" ? _fixture.WinFormsHandle : _fixture.WpfHandle;
+        var window = _fixture.Session.GetWindow(handle)!;
+
+        SnapshotResult Build(SnapshotMode mode) =>
+            new SnapshotBuilder(new ElementRegistry(), mode: mode) { LiveRuntimeIds = false }.Build(handle, window);
+
+        var live = Build(SnapshotMode.Live);
+        var cached = Build(SnapshotMode.Cached);
+        var subtree = Build(SnapshotMode.CachedSubtree);
+        _output.WriteLine($"live {live.Elapsed.TotalMilliseconds:0}ms, cached {cached.Elapsed.TotalMilliseconds:0}ms, " +
+                          $"subtree {subtree.Elapsed.TotalMilliseconds:0}ms, {live.Nodes} nodes");
+
+        Assert.Equal(SnapshotMode.Cached, cached.Mode);
+        Assert.Equal(live.Text, cached.Text);
+        Assert.Equal(live.Text, subtree.Text);
+    }
+
+    [Fact]
+    public void Resnapshot_KeepsRefsStable()
+    {
+        var first = _fixture.TakeSnapshot(_fixture.WinFormsHandle);
+        var second = _fixture.TakeSnapshot(_fixture.WinFormsHandle);
+        Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void BoundedSnapshot_IsTruncated_AndKeepsOtherRefs()
+    {
+        var handle = _fixture.WinFormsHandle;
+        var full = _fixture.TakeSnapshot(handle);
+        var lastRef = full.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => System.Text.RegularExpressions.Regex.Match(l, @"\[ref=(w\d+e\d+)\]"))
+            .Last(m => m.Success).Groups[1].Value;
+
+        var window = _fixture.Session.GetWindow(handle)!;
+        var bounded = new SnapshotBuilder(_fixture.Elements).Build(handle, window,
+            new PlaywrightWindows.Mcp.Core.Snapshots.SnapshotLimits { MaxNodes = 5 });
+        _output.WriteLine(bounded.Text);
+
+        Assert.True(bounded.Truncated);
+        Assert.Equal(5, bounded.Nodes);
+        Assert.Contains("snapshot truncated after 5 elements", bounded.Text);
+        Assert.NotNull(_fixture.Elements.GetElement(lastRef));
     }
 }

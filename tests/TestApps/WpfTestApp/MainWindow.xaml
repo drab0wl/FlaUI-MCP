@@ -163,5 +163,19 @@
                 </ListView>
             </Grid>
         </TabItem>
+
+        <!-- Tab 5: Dialogs -->
+        <TabItem Header="Dialogs" x:Name="DialogsTab" AutomationProperties.AutomationId="DialogsTab">
+            <StackPanel Margin="10" Orientation="Vertical">
+                <Button Content="Show Message Box" x:Name="ShowMessageBoxButton" Click="ShowMessageBox_Click"
+                        AutomationProperties.AutomationId="ShowMessageBoxButton"
+                        HorizontalAlignment="Left" Padding="10,5" Margin="0,0,0,5"/>
+                <Button Content="Open WPF Dialog" x:Name="OpenWpfDialogButton" Click="OpenWpfDialog_Click"
+                        AutomationProperties.AutomationId="OpenWpfDialogButton"
+                        HorizontalAlignment="Left" Padding="10,5" Margin="0,0,0,15"/>
+                <TextBlock x:Name="DialogStatusLabel" Text="Ready"
+                           AutomationProperties.AutomationId="DialogStatusLabel"/>
+            </StackPanel>
+        </TabItem>
     </TabControl>
 </Window>

@@ -1,7 +1,6 @@
 using System.Text.Json;
-using FlaUI.Core.AutomationElements;
-using FlaUI.Core.Input;
 using PlaywrightWindows.Mcp.Core;
+using PlaywrightWindows.Mcp.Core.Actions;
 
 namespace PlaywrightWindows.Mcp.Tools;
 
@@ -11,17 +10,28 @@ namespace PlaywrightWindows.Mcp.Tools;
 public class ClickTool : ToolBase
 {
     private readonly ElementRegistry _elementRegistry;
+    private readonly ClickExecutor _executor;
+    private readonly PostActionSnapshotter? _post;
 
-    public ClickTool(ElementRegistry elementRegistry)
+    public ClickTool(ElementRegistry elementRegistry, ClickExecutor executor, PostActionSnapshotter? post = null)
     {
         _elementRegistry = elementRegistry;
+        _executor = executor;
+        _post = post;
     }
 
     public override string Name => "windows_click";
 
-    public override string Description => 
-        "Click an element by its ref (from windows_snapshot). Prefers Invoke pattern for reliability, " +
-        "falls back to mouse click if needed.";
+    public override string Description =>
+        "Click an element by its ref (from windows_snapshot). Never hangs on modal dialogs: if the click " +
+        "opens one, this returns right away with the dialog's window handle (snapshot it and act on it " +
+        "like any window) and the click becomes a pending operation that finishes when the dialog closes. " +
+        "mode=auto (default) uses UI Automation patterns (Invoke/Toggle/Select), falling back to the mouse. " +
+        "mode=input sends a real mouse click at the element (needs the window visible and foreground; best " +
+        "for buttons that open dialogs in WinForms/Win32 apps, because no UI Automation call is left waiting). " +
+        "mode=invoke forces the pattern path. The result ends with a bounded snapshot of the window you'll " +
+        "act on next (the dialog the click opened, or the app's foreground window), with fresh refs; " +
+        "pass postSnapshot=false to skip it.";
 
     public override object InputSchema => new
     {
@@ -33,6 +43,12 @@ public class ClickTool : ToolBase
                 type = "string",
                 description = "Element ref from windows_snapshot (e.g., 'w1e5')"
             },
+            mode = new
+            {
+                type = "string",
+                @enum = new[] { "auto", "invoke", "input" },
+                description = "How to click (default: auto)"
+            },
             button = new
             {
                 type = "string",
@@ -43,78 +59,99 @@ public class ClickTool : ToolBase
             {
                 type = "boolean",
                 description = "Whether to double-click (default: false)"
+            },
+            waitMs = new
+            {
+                type = "integer",
+                description = "How long to wait for the click to return before reporting it as pending (default: 5000)"
+            },
+            settleMs = new
+            {
+                type = "integer",
+                description = "After the click returns, how long to keep watching for a dialog (default: 250). 0 for clicks known not to open dialogs."
+            },
+            postSnapshot = new
+            {
+                type = "boolean",
+                description = "Append a snapshot of the dialog the click opened or the app's foreground window (default: true)"
             }
         },
         required = new[] { "ref" }
     };
 
-    public override Task<McpToolResult> ExecuteAsync(JsonElement? arguments)
+    public override async Task<McpToolResult> ExecuteAsync(JsonElement? arguments)
     {
         var refId = GetStringArgument(arguments, "ref");
         if (string.IsNullOrEmpty(refId))
         {
-            return Task.FromResult(ErrorResult("Missing required argument: ref"));
+            return ErrorResult("Missing required argument: ref");
         }
-
-        var button = GetStringArgument(arguments, "button") ?? "left";
-        var doubleClick = GetBoolArgument(arguments, "doubleClick", false);
 
         var element = _elementRegistry.GetElement(refId);
         if (element == null)
         {
-            return Task.FromResult(ErrorResult($"Element not found: {refId}. Run windows_snapshot to refresh element refs."));
+            return ErrorResult($"Element not found: {refId}. Run windows_snapshot to refresh element refs.");
         }
+
+        if (!TryParseMode(GetStringArgument(arguments, "mode"), out var mode))
+        {
+            return ErrorResult("mode must be one of: auto, invoke, input");
+        }
+
+        var options = new ActionRunOptions();
+        var waitMs = GetArgument<int?>(arguments, "waitMs");
+        if (waitMs is > 0)
+        {
+            options = options with { WaitTimeout = TimeSpan.FromMilliseconds(Math.Min(waitMs.Value, 25_000)) };
+        }
+        var settleMs = GetArgument<int?>(arguments, "settleMs");
+        if (settleMs is >= 0)
+        {
+            options = options with { SettleTime = TimeSpan.FromMilliseconds(Math.Min(settleMs.Value, 5_000)) };
+        }
+
+        var request = new ClickRequest(
+            refId,
+            mode,
+            GetStringArgument(arguments, "button") ?? "left",
+            GetBoolArgument(arguments, "doubleClick", false),
+            options);
 
         try
         {
-            var elementName = element.Properties.Name.ValueOrDefault ?? refId;
-
-            // Try Invoke pattern first (most reliable for buttons)
-            if (button == "left" && !doubleClick && element.Patterns.Invoke.IsSupported)
+            var result = await _executor.ClickAsync(element, request);
+            var text = result.Text;
+            if (_post != null && _post.IsEnabled(GetArgument<bool?>(arguments, "postSnapshot"))
+                && (!result.IsError || result.DialogOpened))
             {
-                element.Patterns.Invoke.Pattern.Invoke();
-                return Task.FromResult(TextResult($"Invoked {elementName}"));
+                text = PostActionSnapshotter.Append(text, _post.Capture(
+                    new PostActionContext("click", result.ProcessId, result.WindowHwnd, result.NewDialogs)));
             }
-
-            // Try Toggle pattern for checkboxes
-            if (button == "left" && !doubleClick && element.Patterns.Toggle.IsSupported)
-            {
-                element.Patterns.Toggle.Pattern.Toggle();
-                var newState = element.Patterns.Toggle.Pattern.ToggleState.ValueOrDefault;
-                return Task.FromResult(TextResult($"Toggled {elementName} to {newState}"));
-            }
-
-            // Try SelectionItem pattern for list items
-            if (button == "left" && !doubleClick && element.Patterns.SelectionItem.IsSupported)
-            {
-                element.Patterns.SelectionItem.Pattern.Select();
-                return Task.FromResult(TextResult($"Selected {elementName}"));
-            }
-
-            // Fall back to mouse click
-            var clickPoint = element.GetClickablePoint();
-            
-            var mouseButton = button switch
-            {
-                "right" => MouseButton.Right,
-                "middle" => MouseButton.Middle,
-                _ => MouseButton.Left
-            };
-
-            if (doubleClick)
-            {
-                Mouse.DoubleClick(clickPoint, mouseButton);
-                return Task.FromResult(TextResult($"Double-clicked {elementName}"));
-            }
-            else
-            {
-                Mouse.Click(clickPoint, mouseButton);
-                return Task.FromResult(TextResult($"Clicked {elementName}"));
-            }
+            return result.IsError ? ErrorResult(text) : TextResult(text);
         }
         catch (Exception ex)
         {
-            return Task.FromResult(ErrorResult($"Failed to click {refId}: {ex.Message}"));
+            return ErrorResult($"Failed to click {refId}: {ex.Message}");
+        }
+    }
+
+    internal static bool TryParseMode(string? value, out ClickMode mode)
+    {
+        mode = ClickMode.Auto;
+        switch (value?.ToLowerInvariant())
+        {
+            case null:
+            case "":
+            case "auto":
+                return true;
+            case "invoke":
+                mode = ClickMode.Invoke;
+                return true;
+            case "input":
+                mode = ClickMode.Input;
+                return true;
+            default:
+                return false;
         }
     }
 }
