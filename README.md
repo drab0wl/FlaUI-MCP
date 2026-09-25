@@ -241,14 +241,13 @@ has a 24-second budget; if it runs out, the result says which action to continue
 
 ### Configuration
 
+These are for whoever runs the server. What the model can change (post-action output,
+compact snapshots, screenshot output) is a tool argument, never an environment variable.
+
 | Environment variable | Effect |
 |----------------------|--------|
-| `FLAUI_MCP_POST_SNAPSHOT` | `changes` (default), `full` (a capped snapshot when there's nothing to compare), or `off` |
-| `FLAUI_MCP_POST_SNAPSHOT_MAX_NODES` / `_MAX_CHARS` | Bounds for the post-action snapshot (default 150 elements / 8000 characters) |
-| `FLAUI_MCP_SNAPSHOT_COMPACT` | `1` to make `compact: true` the default for `windows_snapshot` |
 | `FLAUI_MCP_SNAPSHOT_MODE` | `cached` (default), `subtree`, or `live` (the original per-property reads) |
 | `FLAUI_MCP_TIMING` | `0` to turn off the `[timing]` lines on stderr |
-| `FLAUI_MCP_SCREENSHOT_OUTPUT` | Default for `windows_screenshot` `output`: `image` (default), `file` or `preview` |
 | `FLAUI_MCP_INSTRUCTIONS` | `off` to send no server instructions, or a path to a text file to send instead of the built-in ones |
 | `FLAUI_MCP_KEYBOARD_GUARD` | `0` to let keyboard input go to whatever window is in the foreground |
 | `FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS` | Make UIA calls against a blocked provider fail after this long |
@@ -338,8 +337,8 @@ the number of calls:
   (`first look, 812 elements; use windows_find ...`) and the window is recorded; the next action
   there reports changes. A dialog the action opened gets a small snapshot (60 elements), since
   it's usually what you act on next. Refs from earlier snapshots stay valid either way.
-  `postSnapshot: "full"` (or `FLAUI_MCP_POST_SNAPSHOT=full`) shows a capped snapshot instead of
-  the summary; `postSnapshot: false` (or `FLAUI_MCP_POST_SNAPSHOT=off`) turns it off.
+  `postSnapshot: "full"` shows a capped snapshot instead of the summary; `postSnapshot: false`
+  turns it off.
   While a pending click blocks the app's UI Automation, you get the dialog's Win32 controls.
 - **Search instead of reading.** On big windows (IDEs, Office) a full snapshot is thousands of
   lines. `windows_find` returns just the matches, each with the named elements it's inside:

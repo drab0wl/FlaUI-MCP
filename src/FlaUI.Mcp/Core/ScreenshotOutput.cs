@@ -11,7 +11,7 @@ public enum ScreenshotOutput
     Preview,
 }
 
-/// <summary>Pure helpers for screenshot output. FLAUI_MCP_SCREENSHOT_OUTPUT sets the default.</summary>
+/// <summary>Pure helpers for screenshot output.</summary>
 public static class ScreenshotOutputs
 {
     public const int PreviewMaxSide = 800;
@@ -24,8 +24,8 @@ public static class ScreenshotOutputs
         _ => null,
     };
 
-    public static ScreenshotOutput Default { get; } =
-        Parse(Environment.GetEnvironmentVariable("FLAUI_MCP_SCREENSHOT_OUTPUT")) ?? ScreenshotOutput.Image;
+    /// <summary>The model picks with the output argument; inline is the default.</summary>
+    public const ScreenshotOutput Default = ScreenshotOutput.Image;
 
     /// <summary>Where a screenshot goes when no savePath is given: a timestamped file under the temp folder.</summary>
     public static string DefaultPath(string tempDirectory, DateTime now, string? label = null)

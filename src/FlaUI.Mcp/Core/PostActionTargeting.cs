@@ -20,9 +20,8 @@ public enum PostActionMode
 public enum PostActionView { Summary, Changes, Snapshot }
 
 /// <summary>
-/// Settings for what's appended to action results.
-/// Environment: FLAUI_MCP_POST_SNAPSHOT=changes (default) | full | off;
-/// FLAUI_MCP_POST_SNAPSHOT_MAX_NODES / _MAX_CHARS bound snapshots.
+/// Settings for what's appended to action results. The model chooses per call with the
+/// postSnapshot argument; these are the defaults and bounds.
 /// </summary>
 public sealed record PostActionOptions
 {
@@ -40,30 +39,6 @@ public sealed record PostActionOptions
     /// <summary>How much of the window to read to find the changes.</summary>
     public int WalkMaxNodes { get; init; } = 5000;
     public TimeSpan TimeBudget { get; init; } = TimeSpan.FromSeconds(4);
-
-    public static PostActionOptions FromEnvironment()
-    {
-        var options = new PostActionOptions();
-        if (PostActionModes.Parse(Environment.GetEnvironmentVariable("FLAUI_MCP_POST_SNAPSHOT")) is { } mode)
-        {
-            options = options with { Mode = mode };
-        }
-        // Older switch: no diffs meant always a snapshot.
-        var diff = Environment.GetEnvironmentVariable("FLAUI_MCP_POST_SNAPSHOT_DIFF");
-        if (diff != null && diff.Trim().ToLowerInvariant() is "0" or "false" or "off" or "no" && options.Mode != PostActionMode.Off)
-        {
-            options = options with { Mode = PostActionMode.Full };
-        }
-        if (int.TryParse(Environment.GetEnvironmentVariable("FLAUI_MCP_POST_SNAPSHOT_MAX_NODES"), out var nodes) && nodes > 0)
-        {
-            options = options with { MaxNodes = nodes };
-        }
-        if (int.TryParse(Environment.GetEnvironmentVariable("FLAUI_MCP_POST_SNAPSHOT_MAX_CHARS"), out var chars) && chars > 0)
-        {
-            options = options with { MaxChars = chars };
-        }
-        return options;
-    }
 }
 
 public static class PostActionModes

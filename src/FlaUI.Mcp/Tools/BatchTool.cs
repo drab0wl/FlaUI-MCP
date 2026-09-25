@@ -833,7 +833,7 @@ public class BatchTool : ToolBase
         }
 
         var snapshot = _snapshotBuilder.BuildSnapshot(handle!, window);
-        if (step.Compact ?? SnapshotTool.CompactByDefault) snapshot = SnapshotText.CompactText(snapshot);
+        if (step.Compact == true) snapshot = SnapshotText.CompactText(snapshot);
         return new StepResult($"\n{snapshot}", false);
     }
 

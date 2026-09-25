@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- `windows_screenshot` `output`: `file` saves the PNG (to `savePath`, else a temp file) and returns its path and size; `preview` also returns a JPEG of at most 800px. `FLAUI_MCP_SCREENSHOT_OUTPUT` sets the default.
+- `windows_screenshot` `output`: `file` saves the PNG (to `savePath`, else a temp file) and returns its path and size; `preview` also returns a JPEG of at most 800px. The default stays `image`.
 - Forgiving names: selectors (batch, `windows_find`, the new tools), menu paths and options match loosely ("Save As" finds "Save &As...", shortcut text ignored), and a miss lists the closest names with refs.
 - `windows_set`: checked / expanded / selected / option / value, acting only if the state differs. Options open combo boxes when needed and realize virtualized list items. Also batch actions `check`, `uncheck`, `expand`, `collapse`, `select`, `set_value`.
 - `windows_menu`: invoke a menu command by path, including sub-menus and context menus; returns dialog handles like a click. Also batch action `menu`.
@@ -18,7 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Test app: WinForms menu bar, status bar and context menu.
 
 ### Changed
-- Action results default to changes only. The first action in a window never seen before returns a one-line summary instead of a snapshot (the window is recorded, so later actions report changes); a newly opened dialog gets a small snapshot (60 elements). `postSnapshot: "full"` / `FLAUI_MCP_POST_SNAPSHOT=full` restores snapshots when there's nothing to compare. `FLAUI_MCP_POST_SNAPSHOT_DIFF` is replaced by that setting (`=0` still maps to `full`).
+- Action results default to changes only. The first action in a window never seen before returns a one-line summary instead of a snapshot (the window is recorded, so later actions report changes); a newly opened dialog gets a small snapshot (60 elements). `postSnapshot: "full"` restores snapshots when there's nothing to compare.
+- Behaviour the model chooses is set only by tool arguments, not environment variables: removed `FLAUI_MCP_POST_SNAPSHOT`, `FLAUI_MCP_POST_SNAPSHOT_DIFF`, `FLAUI_MCP_POST_SNAPSHOT_MAX_NODES` / `_MAX_CHARS`, `FLAUI_MCP_SNAPSHOT_COMPACT` (use `postSnapshot` and `compact`).
 - Tool descriptions rewritten to be about half as long, and to point to the better tool where there is one (e.g. `windows_find` over snapshots on big windows).
 - Modal dialog handling. `windows_click` no longer hangs when a click opens a modal dialog: the UIA call runs on its own thread while a Win32 monitor watches the target process for new dialogs. The click returns as soon as a dialog appears, with the dialog's window handle, and becomes a pending operation (`op1`, ...) that finishes when the dialog closes.
 - `windows_click` `mode`: `auto` (default), `invoke` (UIA patterns only), `input` (real mouse click at the element's clickable point, bringing its window forward first and refusing if another app covers the point). `mode` is also accepted by `windows_batch` click actions.
@@ -27,11 +28,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `windows_dialog`: read, press buttons, set edit text, or close HWND-based dialogs (MessageBox, `#32770`, WinForms) with window messages, bypassing UI Automation.
 - `windows_wait`: wait for a pending click to finish, a dialog to open, or a dialog to close.
 - `FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS` environment variable to cap UIA call time.
-- Action results include post-action state: `windows_click`, `windows_fill`, `windows_dialog` press and `windows_batch` append a bounded snapshot of the dialog the action opened, or the app's foreground window. `postSnapshot: false` or `FLAUI_MCP_POST_SNAPSHOT=0` turns it off; `FLAUI_MCP_POST_SNAPSHOT_MAX_NODES` / `_MAX_CHARS` bound it.
+- Action results include post-action state: `windows_click`, `windows_fill`, `windows_dialog` press and `windows_batch` append a bounded snapshot of the dialog the action opened, or the app's foreground window. `postSnapshot: false` turns it off.
 - `windows_batch` selectors (`name`, `nameContains`, `automationId`, `role`, `handle`, `index`), condition waits (`until`: `dialog_open`, `dialog_closed`, `element`, `element_gone`, `text_contains`), and `dialog_press` / `dialog_set_text` actions. A click followed by `wait until=dialog_open` no longer stops the batch.
-- Post-action results list what changed (added / removed / changed elements, with refs) when the window has been snapshotted before, instead of repeating its first 150 elements. `FLAUI_MCP_POST_SNAPSHOT_DIFF=0` turns this off.
+- Post-action results list what changed (added / removed / changed elements, with refs) when the window has been snapshotted before, instead of repeating its first 150 elements.
 - `windows_find`: search by name / nameContains / automationId / role and get refs plus each match's named ancestors, without a full snapshot.
-- `windows_snapshot` `ref` (snapshot one element's subtree; other refs stay valid), `depth`, and `compact` (hide offscreen elements and unnamed single-child groups; `FLAUI_MCP_SNAPSHOT_COMPACT=1` makes it the default). Post-action snapshots are always compact.
+- `windows_snapshot` `ref` (snapshot one element's subtree; other refs stay valid), `depth`, and `compact` (hide offscreen elements and unnamed single-child groups;). Post-action snapshots are always compact.
 - `windows_batch` `keys` action (chords such as `Ctrl+Shift+B`); like a click, a dialog it opens stops the batch unless the next action waits for one.
 - `settleMs` on `windows_click`, and `noDialog` / `settleMs` on batch clicks, to skip or shorten the 250 ms dialog-settle wait.
 - Per-tool timing on stderr (`[timing] ...`: execution, status-block time, and the gap between calls), with a periodic per-tool summary. `FLAUI_MCP_TIMING=0` disables it.

@@ -35,7 +35,7 @@ public sealed class PostActionSnapshotter
         _pending = pending;
         _builder = new SnapshotBuilder(elements);
         _elements = elements;
-        Options = options ?? PostActionOptions.FromEnvironment();
+        Options = options ?? new PostActionOptions();
     }
 
     public PostActionOptions Options { get; }

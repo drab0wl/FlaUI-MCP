@@ -31,10 +31,6 @@ public class SnapshotTool : ToolBase
         
         "Accessibility tree of a window, with refs (w1e5) the other tools take. Refs stay the same across snapshots. On big windows prefer windows_find, or pass compact=true, depth, or ref (just that part).";
 
-    /// <summary>FLAUI_MCP_SNAPSHOT_COMPACT=1 makes compact the default.</summary>
-    public static bool CompactByDefault { get; } =
-        Environment.GetEnvironmentVariable("FLAUI_MCP_SNAPSHOT_COMPACT")?.Trim().ToLowerInvariant() is "1" or "true" or "on" or "yes";
-
     public override object InputSchema => new
     {
         type = "object",
@@ -68,7 +64,7 @@ public class SnapshotTool : ToolBase
         var handle = GetStringArgument(arguments, "handle");
         var refId = GetStringArgument(arguments, "ref");
         var depth = GetArgument<int?>(arguments, "depth");
-        var compact = GetArgument<bool?>(arguments, "compact") ?? CompactByDefault;
+        var compact = GetArgument<bool?>(arguments, "compact") ?? false;
         var limits = SnapshotLimits.Unbounded with { MaxDepth = depth is >= 0 ? depth.Value : 10 };
 
         if (!string.IsNullOrEmpty(refId))
