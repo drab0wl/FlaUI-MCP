@@ -241,6 +241,7 @@ has a 24-second budget; if it runs out, the result says which action to continue
 | `FLAUI_MCP_SNAPSHOT_COMPACT` | `1` to make `compact: true` the default for `windows_snapshot` |
 | `FLAUI_MCP_SNAPSHOT_MODE` | `cached` (default), `subtree`, or `live` (the original per-property reads) |
 | `FLAUI_MCP_TIMING` | `0` to turn off the `[timing]` lines on stderr |
+| `FLAUI_MCP_INSTRUCTIONS` | `off` to send no server instructions, or a path to a text file to send instead of the built-in ones |
 | `FLAUI_MCP_KEYBOARD_GUARD` | `0` to let keyboard input go to whatever window is in the foreground |
 | `FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS` | Make UIA calls against a blocked provider fail after this long |
 
@@ -414,6 +415,13 @@ through a UI Automation `CacheRequest`, so each element's children arrive with a
 properties in one cross-process call instead of about ten. `FLAUI_MCP_SNAPSHOT_MODE` picks
 `cached` (default), `subtree` (the whole tree in one call; can't stop early at the element
 limit) or `live` (the original per-property reads).
+
+**Server instructions.** At startup the server gives the client a short guide (about 270
+tokens, in `src/FlaUI.Mcp/Mcp/ServerInstructions.cs`) to how the tools fit together: find
+instead of snapshot, `windows_set` / `windows_menu` / `windows_read_table` instead of clicking
+around, one `windows_batch` for several steps, and what to do about dialogs. Clients such as
+Claude Code add it to the model's system prompt. Set `FLAUI_MCP_INSTRUCTIONS` to `off`, or to a
+file with your own text.
 
 **Measuring.** Each tool call writes a line to stderr (never stdout, the MCP channel):
 

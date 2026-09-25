@@ -52,7 +52,7 @@ toolRegistry.RegisterTool(new MenuTool(sessionManager, elementRegistry, elementF
 toolRegistry.RegisterTool(new ReadTableTool(elementRegistry, elementFinder));
 
 // Create and run MCP server
-var server = new McpServer(toolRegistry);
+var server = new McpServer(toolRegistry, ServerInstructions.FromEnvironment());
 
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>

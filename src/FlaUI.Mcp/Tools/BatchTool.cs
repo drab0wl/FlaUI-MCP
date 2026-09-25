@@ -63,20 +63,8 @@ public class BatchTool : ToolBase
     public override string Name => "windows_batch";
 
     public override string Description =>
-        "Execute multiple actions in a single call. Much faster than individual calls. " +
-        "Actions: click, type, fill, keys (chords like Ctrl+Shift+B, to the focused element or a ref/selector), " +
-        "check / uncheck / expand / collapse / select (option=...) / set_value (only act if the state differs, so " +
-        "they're safe to repeat), menu (path [\"File\", \"Save As...\"]; with a ref/selector, that element's context menu), " +
-        "wait, snapshot, dialog_press, dialog_set_text. Names match loosely (\"Save As\" finds \"Save As...\") and a " +
-        "miss lists the closest names. " +
-        "Target elements by ref, or by selector (name / nameContains / automationId / role, optionally " +
-        "handle to limit the search to one window; handle \"$dialog\" is the dialog the batch last saw open), " +
-        "so a whole flow can run without a snapshot in between. " +
-        "wait takes ms, or until=dialog_open | dialog_closed | element | element_gone | text_contains (+ timeoutMs). " +
-        "A click that opens a dialog stops the batch, unless the next action is wait until=dialog_open: then the " +
-        "dialog is expected and the batch goes on (dialog_press/dialog_set_text default to that dialog). " +
-        "noDialog=true on a click skips the 250ms dialog-settle wait. " +
-        "The result ends with a bounded snapshot of the window shown after the last action (postSnapshot=false to skip).";
+        
+        "Run many actions in one call (much faster than one call each). Actions: click, type, fill, keys, check, uncheck, expand, collapse, select (option), set_value, menu (path), wait (ms, or until=dialog_open|dialog_closed|element|element_gone|text_contains), snapshot, dialog_press, dialog_set_text. Target by ref or by name/nameContains/automationId/role, with handle to limit the search to one window (\"$dialog\": the dialog this batch last saw open). A dialog stops the batch unless the next action is wait until=dialog_open. Ends with what changed.";
 
     public override object InputSchema => new
     {

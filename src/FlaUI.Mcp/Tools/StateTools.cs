@@ -88,11 +88,8 @@ public class SetTool : ToolBase
     public override string Name => "windows_set";
 
     public override string Description =>
-        "Put an element into a state, only acting if it isn't already: checked=true/false (check boxes, radio " +
-        "buttons), expanded=true/false (tree items, combo boxes, expanders), selected=true (a list item, tab or " +
-        "tree item), option=\"Blue\" (pick an item inside a combo box, list, tree or tab list, opening it if " +
-        "needed), or value (sliders and spinners take a number; text boxes take text). Target by ref or by " +
-        "name/automationId/role. Like windows_click, it never hangs on a dialog and ends with what changed.";
+        
+        "Put an element into a state, only acting if needed (safe to repeat): checked, expanded, selected=true, option (an item in a combo box, list, tree or tab list), or value (a number for sliders, text for text boxes). Target by ref or name/automationId/role. Never hangs on dialogs; ends with what changed.";
 
     public override object InputSchema => new
     {
@@ -176,11 +173,8 @@ public class MenuTool : ToolBase
     public override string Name => "windows_menu";
 
     public override string Description =>
-        "Choose a menu command in one call: path [\"File\", \"Save As...\"] (or \"File > Save As...\") opens each " +
-        "menu and invokes the last item. Names match loosely (\"Save As\" finds \"Save As...\", accelerators and " +
-        "shortcut text are ignored). With a ref or selector, right-clicks that element and walks its context menu. " +
-        "If the command opens a dialog, returns right away with its handle, like windows_click. mode=input clicks " +
-        "each item with the mouse, for menus that don't respond to UI Automation.";
+        
+        "Run a menu command by path, e.g. \"File > Save As...\"; with a ref or name/automationId/role, uses that element's context menu. Names match loosely. Returns a dialog's handle if one opens. mode=input clicks the items with the mouse if the default fails.";
 
     public override object InputSchema => new
     {
@@ -255,9 +249,8 @@ public class ReadTableTool : ToolBase
     public override string Name => "windows_read_table";
 
     public override string Description =>
-        "Read a data grid, list view or table as tab-separated rows: column headers, then one line per row starting " +
-        "with the row's ref (click or select it with that). Far smaller and clearer than a snapshot of a grid. " +
-        "Use start/maxRows to page. Virtualized grids only expose the rows near the viewport.";
+        
+        "Read a grid, list view or table as tab-separated rows: headers, then one line per row starting with its ref. Page with start/maxRows.";
 
     public override object InputSchema => new
     {

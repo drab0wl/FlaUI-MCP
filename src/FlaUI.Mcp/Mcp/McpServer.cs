@@ -8,10 +8,12 @@ namespace PlaywrightWindows.Mcp;
 public class McpServer
 {
     private readonly ToolRegistry _toolRegistry;
+    private readonly string? _instructions;
 
-    public McpServer(ToolRegistry toolRegistry)
+    public McpServer(ToolRegistry toolRegistry, string? instructions = null)
     {
         _toolRegistry = toolRegistry;
+        _instructions = instructions;
     }
 
     public async Task RunAsync(CancellationToken cancellationToken = default)
@@ -97,7 +99,8 @@ public class McpServer
             {
                 Name = "playwright-windows",
                 Version = "0.1.0"
-            }
+            },
+            Instructions = _instructions,
         };
     }
 

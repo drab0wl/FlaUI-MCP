@@ -21,10 +21,8 @@ public class FindTool : ToolBase
     public override string Name => "windows_find";
 
     public override string Description =>
-        "Find elements by name, nameContains, automationId and/or role (as printed in snapshots) and get " +
-        "their refs, each with the named elements it sits inside. Much cheaper than windows_snapshot on big " +
-        "windows (IDEs, Office): search for what you need instead of reading the whole tree. Searches the " +
-        "window 'handle', or by default the tracked apps' foreground window, dialogs and windows.";
+        
+        "Find elements by name, nameContains, automationId and/or role. Returns their refs, each with the named elements it sits in. Much cheaper than a snapshot on big windows. A miss lists the closest names.";
 
     public override object InputSchema => new
     {

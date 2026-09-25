@@ -18,8 +18,8 @@ public class ListWindowsTool : ToolBase
     public override string Name => "windows_list_windows";
 
     public override string Description => 
-        "List all open windows with their handles, titles, and process names. " +
-        "Use this to find windows to interact with.";
+        
+        "List open top-level windows with their handles, titles and process names.";
 
     public override object InputSchema => new
     {
@@ -65,7 +65,8 @@ public class FocusWindowTool : ToolBase
     public override string Name => "windows_focus";
 
     public override string Description => 
-        "Bring a window to the foreground and give it focus.";
+        
+        "Bring a window to the foreground.";
 
     public override object InputSchema => new
     {
@@ -130,6 +131,7 @@ public class CloseWindowTool : ToolBase
     public override string Name => "windows_close";
 
     public override string Description => 
+        
         "Close a window.";
 
     public override object InputSchema => new

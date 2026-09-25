@@ -92,6 +92,10 @@ public record McpInitializeResult
     
     [JsonPropertyName("serverInfo")]
     public McpServerInfo ServerInfo { get; init; } = new();
+
+    /// <summary>How to use the server, for the client to show the model. Omitted when null.</summary>
+    [JsonPropertyName("instructions")]
+    public string? Instructions { get; init; }
 }
 
 public record McpTool

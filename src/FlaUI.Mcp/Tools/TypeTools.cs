@@ -22,8 +22,8 @@ public class TypeTool : ToolBase
     public override string Name => "windows_type";
 
     public override string Description => 
-        "Type text into an element. The element will be focused first. " +
-        "Use this for typing without clearing existing content. Use windows_fill to replace content.";
+        
+        "Type text into an element (ref, focused first) or the focused element, without clearing it (windows_fill replaces). Refused if the app isn't in the foreground.";
 
     public override object InputSchema => new
     {
@@ -33,7 +33,7 @@ public class TypeTool : ToolBase
             @ref = new
             {
                 type = "string",
-                description = "Element ref from windows_snapshot (e.g., 'w1e5'). If omitted, types to currently focused element."
+                description = "Element ref from windows_snapshot or windows_find (e.g., 'w1e5'). If omitted, types to currently focused element."
             },
             text = new
             {
@@ -119,8 +119,8 @@ public class FillTool : ToolBase
     public override string Name => "windows_fill";
 
     public override string Description => 
-        "Clear and fill a text field with new value. Prefers Value pattern for reliability. " +
-        "The result ends with a bounded snapshot of the app's foreground window (postSnapshot=false to skip).";
+        
+        "Replace a text field's content. Ends with what changed.";
 
     public override object InputSchema => new
     {
@@ -130,7 +130,7 @@ public class FillTool : ToolBase
             @ref = new
             {
                 type = "string",
-                description = "Element ref from windows_snapshot (e.g., 'w1e5')"
+                description = "Element ref from windows_snapshot or windows_find (e.g., 'w1e5')"
             },
             value = new
             {

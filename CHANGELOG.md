@@ -13,7 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `windows_menu`: invoke a menu command by path, including sub-menus and context menus; returns dialog handles like a click. Also batch action `menu`.
 - `windows_read_table`: grids, list views and tables as tab-separated rows with a ref per row, paged with `start` / `maxRows`.
 - Keyboard guard: typing and key presses are refused when the automated app isn't in the foreground (after trying to bring the target forward). `FLAUI_MCP_KEYBOARD_GUARD=0` turns it off.
+- Server instructions: a short guide to using the tools together, sent in the `initialize` result. `FLAUI_MCP_INSTRUCTIONS=off` or a file path overrides it.
 - Test app: WinForms menu bar, status bar and context menu.
+
+### Changed
+- Tool descriptions rewritten to be about half as long, and to point to the better tool where there is one (e.g. `windows_find` over snapshots on big windows).
 - Modal dialog handling. `windows_click` no longer hangs when a click opens a modal dialog: the UIA call runs on its own thread while a Win32 monitor watches the target process for new dialogs. The click returns as soon as a dialog appears, with the dialog's window handle, and becomes a pending operation (`op1`, ...) that finishes when the dialog closes.
 - `windows_click` `mode`: `auto` (default), `invoke` (UIA patterns only), `input` (real mouse click at the element's clickable point, bringing its window forward first and refusing if another app covers the point). `mode` is also accepted by `windows_batch` click actions.
 - Every tool result ends with a status block listing open modal/Win32 dialogs in the apps being automated, pending clicks, and clicks that finished since the last call.
