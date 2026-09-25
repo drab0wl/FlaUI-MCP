@@ -18,7 +18,8 @@ public class LaunchTool : ToolBase
     public override string Name => "windows_launch";
 
     public override string Description => 
-        "Launch a Windows application. Returns a window handle for use with other tools.";
+        
+        "Launch an app (exe path or name, or UWP app ID) and return its main window handle (w1).";
 
     public override object InputSchema => new
     {

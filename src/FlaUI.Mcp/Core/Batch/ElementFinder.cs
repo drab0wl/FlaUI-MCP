@@ -39,13 +39,18 @@ public sealed class ElementFinder
     }
 
     /// <param name="lastDialog">What "$dialog" means right now (a handle), if anything.</param>
+    /// <param name="forgiving">
+    /// On a miss, accept a loose name match ("Save As" for "Save As...", "OK" for "&amp;OK"), and
+    /// otherwise list the closest names in the error. Costs one extra search, so polling waits
+    /// leave it off.
+    /// </param>
     /// <returns>The element, or null with <paramref name="error"/> saying why.</returns>
-    public FoundElement? Find(ElementSelector selector, string? lastDialog, out string? error)
+    public FoundElement? Find(ElementSelector selector, string? lastDialog, out string? error, bool forgiving = false)
     {
         var sw = Stopwatch.StartNew();
         try
         {
-            return FindCore(selector, lastDialog, out error);
+            return FindCore(selector, lastDialog, out error, forgiving);
         }
         finally
         {
@@ -53,12 +58,13 @@ public sealed class ElementFinder
         }
     }
 
-    private FoundElement? FindCore(ElementSelector selector, string? lastDialog, out string? error)
+    private FoundElement? FindCore(ElementSelector selector, string? lastDialog, out string? error, bool forgiving)
     {
         error = null;
         var scopes = Scopes(selector, lastDialog, out error);
         if (scopes == null) return null;
 
+        var searched = new List<(string Handle, AutomationElement Window)>();
         foreach (var handle in scopes)
         {
             var hwnd = _sessions.GetHwnd(handle);
@@ -73,20 +79,112 @@ public sealed class ElementFinder
 
             var window = _sessions.GetWindow(handle);
             if (window == null) continue;
+            searched.Add((handle, window));
 
             var element = Search(window, selector);
             if (element == null) continue;
 
-            string? key = null;
-            try { key = SnapshotBuilder.RuntimeIdKey(element.Properties.RuntimeId.ValueOrDefault); } catch { }
-            var refId = _elements.RegisterFound(handle, element, key);
             error = null;
-            return new FoundElement(element, refId, handle);
+            return Register(handle, element);
+        }
+
+        var closest = new List<string>();
+        if (forgiving && selector.CanForgive)
+        {
+            foreach (var (handle, window) in searched)
+            {
+                var (loose, suggestions) = Forgive(handle, window, selector, selector.Index + 1);
+                if (loose.Count > selector.Index)
+                {
+                    error = null;
+                    return Register(handle, loose[selector.Index]);
+                }
+                closest.AddRange(suggestions);
+            }
         }
 
         error ??= $"No element matches {selector.Describe()}" +
-                  (selector.Handle == null ? $" (searched {string.Join(", ", scopes)})" : "") + ".";
+                  (selector.Handle == null ? $" (searched {string.Join(", ", scopes)})" : "") + "." +
+                  Closest(closest);
         return null;
+    }
+
+    private FoundElement Register(string handle, AutomationElement element)
+    {
+        string? key = null;
+        try { key = SnapshotBuilder.RuntimeIdKey(element.Properties.RuntimeId.ValueOrDefault); } catch { }
+        return new FoundElement(element, _elements.RegisterFound(handle, element, key), handle);
+    }
+
+    private static string Closest(IReadOnlyList<string> suggestions) =>
+        suggestions.Count == 0 ? "" : " Closest: " + string.Join("; ", suggestions.Take(5)) + ".";
+
+    /// <summary>
+    /// One cached pass over the window: elements whose names match loosely (up to
+    /// <paramref name="max"/>), else snapshot lines (with refs) of the closest names.
+    /// </summary>
+    private (List<AutomationElement> Loose, List<string> Suggestions) Forgive(string handle, AutomationElement window, ElementSelector selector, int max)
+    {
+        const int MaxCandidates = 5000;
+        var sw = Stopwatch.StartNew();
+        var automation = window.Automation;
+        var ids = automation.PropertyLibrary.Element;
+        var loose = new List<AutomationElement>();
+        var suggestions = new List<string>();
+        try
+        {
+            using (SnapshotBuilder.CreateCacheRequest(automation, TreeScope.Element).Activate())
+            {
+                var role = RoleCondition(window, selector);
+                var candidates = window.FindAll(TreeScope.Subtree, role ?? TrueCondition.Default)
+                    .Take(MaxCandidates)
+                    .Select(e => (Element: e,
+                                  Node: SnapshotBuilder.ReadCached(e, automation),
+                                  AutomationId: CachedString(e, ids.AutomationId)))
+                    .ToList();
+
+                loose = candidates
+                    .Where(c => (selector.Name == null || NameMatch.LooselyEquals(selector.Name, c.Node.Name))
+                                && (selector.AutomationId == null || string.Equals(selector.AutomationId, c.AutomationId, StringComparison.OrdinalIgnoreCase)))
+                    .Take(max)
+                    .Select(c => c.Element)
+                    .ToList();
+                if (loose.Count > 0) return (loose, suggestions);
+
+                Func<(AutomationElement Element, SnapshotNode Node, string? AutomationId), string?> nameOf =
+                    selector.Name != null ? c => c.Node.Name : c => c.AutomationId;
+                var wanted = selector.Name ?? selector.AutomationId!;
+                foreach (var c in NameMatch.Suggest(wanted, candidates.Where(c => !string.IsNullOrWhiteSpace(nameOf(c))), nameOf))
+                {
+                    var refId = _elements.RegisterFound(handle, c.Element, c.Node.RuntimeId);
+                    var display = selector.Name != null
+                        ? SnapshotFormat.DisplayName(c.Node.Name, c.Node.AutomationId)
+                        : $"[{c.AutomationId}]";
+                    suggestions.Add(SnapshotFormat.Line(refId, display, SnapshotFormat.Role(c.Node.ControlType), SnapshotFormat.States(c.Node)));
+                }
+            }
+        }
+        catch
+        {
+            // Suggestions are a nicety; the miss is reported either way.
+        }
+        finally
+        {
+            TimingLog.Shared.Detail("find-forgiving", sw.Elapsed, $"{selector.Describe()} loose={loose.Count} suggestions={suggestions.Count}");
+        }
+        return (loose, suggestions);
+    }
+
+    private static string? CachedString(AutomationElement element, FlaUI.Core.Identifiers.PropertyId id)
+    {
+        try
+        {
+            return element.FrameworkAutomationElement.TryGetPropertyValue<string>(id, out var value) ? value : null;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -102,6 +200,7 @@ public sealed class ElementFinder
         var scopes = Scopes(selector, lastDialog: null, out error);
         if (scopes == null) return found;
 
+        var searched = new List<string>();
         foreach (var handle in scopes)
         {
             var hwnd = _sessions.GetHwnd(handle);
@@ -113,16 +212,11 @@ public sealed class ElementFinder
             }
             var window = _sessions.GetWindow(handle);
             if (window == null) continue;
+            searched.Add(handle);
 
             var automation = window.Automation;
             var walker = automation.TreeWalkerFactory.GetRawViewWalker();
-            // Read before the cache is active (they aren't in any cache).
-            var stopAt = new HashSet<string?>
-            {
-                SnapshotBuilder.RuntimeIdKey(Try(() => window.Properties.RuntimeId.ValueOrDefault)),
-                SnapshotBuilder.RuntimeIdKey(Try(() => automation.GetDesktop().Properties.RuntimeId.ValueOrDefault)),
-            };
-            stopAt.Remove(null);
+            var stopAt = StopAt(window);
             using (SnapshotBuilder.CreateCacheRequest(automation, TreeScope.Element).Activate())
             {
                 // One call returns the matches with their properties; limit + 1 tells us if there are more.
@@ -146,10 +240,61 @@ public sealed class ElementFinder
         }
 
         TimingLog.Shared.Detail("find-all", sw.Elapsed, $"{selector.Describe()} matches={found.Count}");
-        if (found.Count > 0) error = null;
-        else error ??= $"No element matches {selector.Describe()}" +
-                       (selector.Handle == null ? $" (searched {string.Join(", ", scopes)})" : "") + ".";
+        if (found.Count > 0)
+        {
+            error = null;
+            return found;
+        }
+
+        // Nothing exact: loose name matches count; otherwise say what's close.
+        var closest = new List<string>();
+        if (selector.CanForgive)
+        {
+            foreach (var handle in searched)
+            {
+                var window = _sessions.GetWindow(handle);
+                if (window == null) continue;
+                var (loose, suggestions) = Forgive(handle, window, selector, limit - found.Count);
+                var automation = window.Automation;
+                var walker = automation.TreeWalkerFactory.GetRawViewWalker();
+                var stopAt = StopAt(window);
+                using (SnapshotBuilder.CreateCacheRequest(automation, TreeScope.Element).Activate())
+                {
+                    foreach (var element in loose)
+                    {
+                        var cached = element.FrameworkAutomationElement.GetUpdatedCache() ?? element;
+                        var node = SnapshotBuilder.ReadCached(cached, automation);
+                        var refId = _elements.RegisterFound(handle, element, node.RuntimeId);
+                        var line = SnapshotFormat.Line(refId, SnapshotFormat.DisplayName(node.Name, node.AutomationId),
+                            SnapshotFormat.Role(node.ControlType), SnapshotFormat.States(node));
+                        found.Add(new FoundLine(refId, handle, line, Ancestors(walker, cached, automation, stopAt)));
+                    }
+                }
+                closest.AddRange(suggestions);
+                if (found.Count >= limit) break;
+            }
+        }
+        if (found.Count > 0)
+        {
+            error = null;
+            return found;
+        }
+        error ??= $"No element matches {selector.Describe()}" +
+                  (selector.Handle == null ? $" (searched {string.Join(", ", scopes)})" : "") + "." +
+                  Closest(closest);
         return found;
+    }
+
+    /// <summary>Runtime ids of the window and the desktop. Call before a cache is active (they aren't in it).</summary>
+    private static IReadOnlySet<string?> StopAt(AutomationElement window)
+    {
+        var stopAt = new HashSet<string?>
+        {
+            SnapshotBuilder.RuntimeIdKey(Try(() => window.Properties.RuntimeId.ValueOrDefault)),
+            SnapshotBuilder.RuntimeIdKey(Try(() => window.Automation.GetDesktop().Properties.RuntimeId.ValueOrDefault)),
+        };
+        stopAt.Remove(null);
+        return stopAt;
     }
 
     /// <param name="stopAt">Runtime ids of the searched window and the desktop.</param>
@@ -231,14 +376,18 @@ public sealed class ElementFinder
         var conditions = new List<ConditionBase>();
         if (selector.Name != null) conditions.Add(cf.ByName(selector.Name));
         if (selector.AutomationId != null) conditions.Add(cf.ByAutomationId(selector.AutomationId));
-        if (selector.Role != null)
-        {
-            var types = SnapshotFormat.ControlTypesForRole(selector.Role);
-            conditions.Add(types.Count == 1
-                ? cf.ByControlType(types[0])
-                : new OrCondition(types.Select(t => (ConditionBase)cf.ByControlType(t))));
-        }
+        if (RoleCondition(window, selector) is { } role) conditions.Add(role);
         return conditions;
+    }
+
+    private static ConditionBase? RoleCondition(AutomationElement window, ElementSelector selector)
+    {
+        if (selector.Role == null) return null;
+        var cf = window.ConditionFactory;
+        var types = SnapshotFormat.ControlTypesForRole(selector.Role);
+        return types.Count == 1
+            ? cf.ByControlType(types[0])
+            : new OrCondition(types.Select(t => (ConditionBase)cf.ByControlType(t)));
     }
 
     /// <summary>Matches in document order, at most <paramref name="max"/>.</summary>

@@ -28,6 +28,40 @@ namespace WinFormsTestApp
             _tabs.TabPages.Add(CreateGridTab());
             _tabs.TabPages.Add(CreateTreeTab());
             _tabs.TabPages.Add(CreateDialogTab());
+
+            // Menus (for windows_menu and batch "menu"). Added after the tabs so they dock first.
+            var menuStatus = new ToolStripStatusLabel("Menu: none") { Name = "MenuStatusLabel" };
+            var status = new StatusStrip { Name = "MainStatusStrip" };
+            status.Items.Add(menuStatus);
+
+            var menu = new MenuStrip { Name = "MainMenu" };
+            var file = new ToolStripMenuItem("&File") { Name = "FileMenu" };
+            var recent = new ToolStripMenuItem("&Recent") { Name = "RecentMenu" };
+            recent.DropDownItems.Add(new ToolStripMenuItem("Report.txt", null, (s, e) => menuStatus.Text = "Menu: opened Report.txt"));
+            recent.DropDownItems.Add(new ToolStripMenuItem("Notes.md", null, (s, e) => menuStatus.Text = "Menu: opened Notes.md"));
+            file.DropDownItems.Add(recent);
+            file.DropDownItems.Add(new ToolStripMenuItem("&New", null, (s, e) => menuStatus.Text = "Menu: new")
+            {
+                ShortcutKeys = Keys.Control | Keys.N,
+            });
+            var tools = new ToolStripMenuItem("&Tools") { Name = "ToolsMenu" };
+            tools.DropDownItems.Add(new ToolStripMenuItem("Show &Settings...", null, (s, e) =>
+            {
+                var result = MessageBox.Show(this, "Apply the new settings?", "Settings", MessageBoxButtons.OKCancel);
+                menuStatus.Text = $"Menu: settings {result}";
+            }));
+            menu.Items.Add(file);
+            menu.Items.Add(tools);
+
+            Controls.Add(menu);
+            Controls.Add(status);
+            MainMenuStrip = menu;
+
+            // A context menu, on the status bar.
+            var context = new ContextMenuStrip { Name = "StatusContextMenu" };
+            context.Items.Add(new ToolStripMenuItem("Copy Status", null, (s, e) => menuStatus.Text = "Menu: copied status"));
+            context.Items.Add(new ToolStripMenuItem("Clear Status", null, (s, e) => menuStatus.Text = "Menu: cleared"));
+            status.ContextMenuStrip = context;
         }
 
         /// <summary>

@@ -28,11 +28,8 @@ public class SnapshotTool : ToolBase
     public override string Name => "windows_snapshot";
 
     public override string Description => 
-        "Capture accessibility snapshot of a window. Returns a structured tree with element refs " +
-        "that can be used with windows_click, windows_type, etc. This is the primary tool for " +
-        "understanding window contents - use it before interacting with elements. On big windows, pass " +
-        "ref to read one part (e.g. a pane found with windows_find), depth to stop early, or compact=true " +
-        "to hide offscreen elements and layout-only groups.";
+        
+        "Accessibility tree of a window, with refs (w1e5) the other tools take. Refs stay the same across snapshots. On big windows prefer windows_find, or pass compact=true, depth, or ref (just that part).";
 
     /// <summary>FLAUI_MCP_SNAPSHOT_COMPACT=1 makes compact the default.</summary>
     public static bool CompactByDefault { get; } =

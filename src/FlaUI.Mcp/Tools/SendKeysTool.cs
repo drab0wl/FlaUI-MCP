@@ -120,8 +120,11 @@ public class SendKeysTool : ToolBase
     /// Initializes a new instance of the <see cref="SendKeysTool"/> class.
     /// </summary>
     /// <param name="elementRegistry">Registry used to resolve element references for focus targeting.</param>
-    public SendKeysTool(ElementRegistry elementRegistry)
+    private readonly KeyboardGuard? _guard;
+
+    public SendKeysTool(ElementRegistry elementRegistry, KeyboardGuard? guard = null)
     {
+        _guard = guard;
         _elementRegistry = elementRegistry;
     }
 
@@ -134,8 +137,8 @@ public class SendKeysTool : ToolBase
     /// Gets the MCP tool description.
     /// </summary>
     public override string Description =>
-        "Send key presses or key chords to an element by ref or the focused element. " +
-        "Supports either `chord` (single chord, e.g., Ctrl+Right) or `keys` array (sequence, e.g., [\"Ctrl+C\",\"Ctrl+V\"]).";
+        
+        "Send key presses: chord=\"Ctrl+S\", or keys=[\"Down\", \"Enter\"] in order, to a ref (focused first) or the focused element. Refused if the app isn't in the foreground.";
 
     /// <summary>
     /// Gets the JSON schema for tool inputs.
@@ -148,7 +151,7 @@ public class SendKeysTool : ToolBase
             @ref = new
             {
                 type = "string",
-                description = "Element ref from windows_snapshot (e.g., 'w1e5'). If omitted, sends to focused element."
+                description = "Element ref from windows_snapshot or windows_find (e.g., 'w1e5'). If omitted, sends to focused element."
             },
             chord = new
             {
@@ -202,6 +205,12 @@ public class SendKeysTool : ToolBase
 
                 element.Focus();
                 Thread.Sleep(50);
+            }
+
+            var target = string.IsNullOrWhiteSpace(refId) ? null : _elementRegistry.GetElement(refId);
+            if (_guard?.Check(target) is { } refusal)
+            {
+                return Task.FromResult(ErrorResult(refusal));
             }
 
             if (hasChord)

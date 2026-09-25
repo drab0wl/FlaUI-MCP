@@ -18,8 +18,8 @@ public class GetTextTool : ToolBase
     public override string Name => "windows_get_text";
 
     public override string Description => 
-        "Get the text content of an element. Returns the element's Name property, " +
-        "or for text inputs, the current value.";
+        
+        "The text an element shows: a text box's value, a list's selection, else its name or document text.";
 
     public override object InputSchema => new
     {
@@ -29,7 +29,7 @@ public class GetTextTool : ToolBase
             @ref = new
             {
                 type = "string",
-                description = "Element ref from windows_snapshot (e.g., 'w1e5')"
+                description = "Element ref from windows_snapshot or windows_find (e.g., 'w1e5')"
             }
         },
         required = new[] { "ref" }

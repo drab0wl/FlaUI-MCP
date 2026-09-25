@@ -23,15 +23,8 @@ public class ClickTool : ToolBase
     public override string Name => "windows_click";
 
     public override string Description =>
-        "Click an element by its ref (from windows_snapshot). Never hangs on modal dialogs: if the click " +
-        "opens one, this returns right away with the dialog's window handle (snapshot it and act on it " +
-        "like any window) and the click becomes a pending operation that finishes when the dialog closes. " +
-        "mode=auto (default) uses UI Automation patterns (Invoke/Toggle/Select), falling back to the mouse. " +
-        "mode=input sends a real mouse click at the element (needs the window visible and foreground; best " +
-        "for buttons that open dialogs in WinForms/Win32 apps, because no UI Automation call is left waiting). " +
-        "mode=invoke forces the pattern path. The result ends with a bounded snapshot of the window you'll " +
-        "act on next (the dialog the click opened, or the app's foreground window), with fresh refs; " +
-        "pass postSnapshot=false to skip it.";
+        
+        "Click an element by ref. Never hangs: if the click opens a dialog, the dialog's handle comes back at once (the click stays pending until it closes). mode: auto (default: UI Automation pattern, else mouse), invoke, or input (a real mouse click; needs the window visible). Ends with what changed; postSnapshot=false skips that. For checkboxes, options and menus, windows_set and windows_menu are simpler.";
 
     public override object InputSchema => new
     {
@@ -41,7 +34,7 @@ public class ClickTool : ToolBase
             @ref = new
             {
                 type = "string",
-                description = "Element ref from windows_snapshot (e.g., 'w1e5')"
+                description = "Element ref from windows_snapshot or windows_find (e.g., 'w1e5')"
             },
             mode = new
             {

@@ -211,4 +211,26 @@ public class BatchStepTests
             "... more than 3 matches; narrow the selector (role, handle) or raise limit.",
         }, text.Split('\n').Select(l => l.TrimEnd('\r')));
     }
+
+    [Fact]
+    public void Parse_StateAndMenuSteps()
+    {
+        Assert.Equal("Blue", Step("""{"action":"select","name":"Color","option":"Blue"}""").Option);
+        Assert.Equal("75", Step("""{"action":"set_value","name":"Volume","value":75}""").Value);
+        Assert.Equal("0.5", Step("""{"action":"set_value","name":"Volume","value":"0.5"}""").Value);
+        Assert.Equal(new[] { "File", "Save As..." }, Step("""{"action":"menu","path":"File > Save As..."}""").Path);
+        Assert.Null(Step("""{"action":"menu","path":"File > Open"}""").Selector);
+    }
+
+    [Fact]
+    public void MenuFollowedByDialogWait_IsExpected()
+    {
+        var steps = Steps(
+            """{"action":"menu","path":["File","Open..."]}""",
+            """{"action":"wait","until":"dialog_open"}""");
+        Assert.True(BatchPlan.ExpectsDialog(steps, 0));
+        Assert.False(BatchPlan.StopAfterClick(dialogOpened: true, stillRunning: true, steps, 0));
+        Assert.Contains("menu", BatchPlan.ClickLike);
+        Assert.Contains("check", BatchPlan.ClickLike);
+    }
 }

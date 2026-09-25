@@ -28,9 +28,8 @@ public class DialogsTool : ToolBase
     public override string Name => "windows_dialogs";
 
     public override string Description =>
-        "List dialogs (modal and modeless) open in the apps you're automating, with window handles you can " +
-        "pass to windows_snapshot or windows_dialog. Also lists clicks still pending behind a dialog. " +
-        "Works even when UI Automation is blocked.";
+        
+        "List dialogs open in the automated apps (handles for windows_snapshot or windows_dialog) and clicks pending behind them. Works while UI Automation is blocked.";
 
     public override object InputSchema => new
     {
@@ -113,13 +112,8 @@ public class NativeDialogTool : ToolBase
     public override string Name => "windows_dialog";
 
     public override string Description =>
-        "Read or operate a classic Windows dialog (MessageBox, #32770 dialogs, WinForms forms) using window " +
-        "messages instead of UI Automation, so it works even when the app's UI Automation is blocked by the " +
-        "dialog. action=read lists the dialog's controls with refs (c1, c2...). action=press clicks a button " +
-        "by text ('Yes', '&Save'), ref ('c3') or standard name (ok, cancel, yes, no, retry, ignore, abort, close). " +
-        "action=set_text types into an edit box by ref. action=close sends WM_CLOSE (like the title-bar X). Cannot see inside WPF or task-dialog content; use " +
-        "windows_snapshot for those. After press, the result ends with a snapshot of what the app shows next " +
-        "(postSnapshot=false to skip).";
+        
+        "Read or drive a classic dialog (MessageBox, #32770, WinForms) with window messages; works while UI Automation is blocked. action: read (default; lists controls c1, c2...), press (button text, cN, or ok/cancel/yes/no...), set_text (control + text), close. For WPF and task dialogs use windows_snapshot instead.";
 
     public override object InputSchema => new
     {
@@ -294,9 +288,8 @@ public class WaitTool : ToolBase
     public override string Name => "windows_wait";
 
     public override string Description =>
-        "Wait for something to happen. until=op_done waits for a pending click (op) to finish. " +
-        "until=dialog_open waits for a new dialog in the tracked apps. until=dialog_closed waits for " +
-        "the dialog 'handle' to close. Returns as soon as the condition is met, or at timeoutMs.";
+        
+        "Wait for a pending click to finish (op), a new dialog (until=dialog_open), or a dialog to close (until=dialog_closed + handle). Returns as soon as it happens.";
 
     public override object InputSchema => new
     {

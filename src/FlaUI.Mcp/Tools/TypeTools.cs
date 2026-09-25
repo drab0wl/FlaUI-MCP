@@ -11,17 +11,19 @@ namespace PlaywrightWindows.Mcp.Tools;
 public class TypeTool : ToolBase
 {
     private readonly ElementRegistry _elementRegistry;
+    private readonly KeyboardGuard? _guard;
 
-    public TypeTool(ElementRegistry elementRegistry)
+    public TypeTool(ElementRegistry elementRegistry, KeyboardGuard? guard = null)
     {
         _elementRegistry = elementRegistry;
+        _guard = guard;
     }
 
     public override string Name => "windows_type";
 
     public override string Description => 
-        "Type text into an element. The element will be focused first. " +
-        "Use this for typing without clearing existing content. Use windows_fill to replace content.";
+        
+        "Type text into an element (ref, focused first) or the focused element, without clearing it (windows_fill replaces). Refused if the app isn't in the foreground.";
 
     public override object InputSchema => new
     {
@@ -31,7 +33,7 @@ public class TypeTool : ToolBase
             @ref = new
             {
                 type = "string",
-                description = "Element ref from windows_snapshot (e.g., 'w1e5'). If omitted, types to currently focused element."
+                description = "Element ref from windows_snapshot or windows_find (e.g., 'w1e5'). If omitted, types to currently focused element."
             },
             text = new
             {
@@ -61,9 +63,10 @@ public class TypeTool : ToolBase
         try
         {
             // Focus element if ref provided
+            FlaUI.Core.AutomationElements.AutomationElement? element = null;
             if (!string.IsNullOrEmpty(refId))
             {
-                var element = _elementRegistry.GetElement(refId);
+                element = _elementRegistry.GetElement(refId);
                 if (element == null)
                 {
                     return Task.FromResult(ErrorResult($"Element not found: {refId}. Run windows_snapshot to refresh element refs."));
@@ -71,6 +74,11 @@ public class TypeTool : ToolBase
 
                 element.Focus();
                 Thread.Sleep(50); // Small delay to ensure focus
+            }
+
+            if (_guard?.Check(element) is { } refusal)
+            {
+                return Task.FromResult(ErrorResult(refusal));
             }
 
             // Type the text
@@ -99,18 +107,20 @@ public class FillTool : ToolBase
 {
     private readonly ElementRegistry _elementRegistry;
     private readonly PostActionSnapshotter? _post;
+    private readonly KeyboardGuard? _guard;
 
-    public FillTool(ElementRegistry elementRegistry, PostActionSnapshotter? post = null)
+    public FillTool(ElementRegistry elementRegistry, PostActionSnapshotter? post = null, KeyboardGuard? guard = null)
     {
         _elementRegistry = elementRegistry;
         _post = post;
+        _guard = guard;
     }
 
     public override string Name => "windows_fill";
 
     public override string Description => 
-        "Clear and fill a text field with new value. Prefers Value pattern for reliability. " +
-        "The result ends with a bounded snapshot of the app's foreground window (postSnapshot=false to skip).";
+        
+        "Replace a text field's content. Ends with what changed.";
 
     public override object InputSchema => new
     {
@@ -120,7 +130,7 @@ public class FillTool : ToolBase
             @ref = new
             {
                 type = "string",
-                description = "Element ref from windows_snapshot (e.g., 'w1e5')"
+                description = "Element ref from windows_snapshot or windows_find (e.g., 'w1e5')"
             },
             value = new
             {
@@ -174,6 +184,10 @@ public class FillTool : ToolBase
             // Fall back to focus + select all + type
             element.Focus();
             Thread.Sleep(50);
+            if (_guard?.Check(element) is { } refusal)
+            {
+                return Task.FromResult(ErrorResult($"{elementName} has no Value pattern, so filling needs the keyboard. {refusal}"));
+            }
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
             Thread.Sleep(50);
             Keyboard.Type(value);

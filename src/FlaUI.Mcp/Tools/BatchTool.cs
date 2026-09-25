@@ -30,6 +30,9 @@ public class BatchTool : ToolBase
     private readonly PendingOperationRegistry _pending;
     private readonly ElementFinder _finder;
     private readonly PostActionSnapshotter? _post;
+    private readonly StateActions _state;
+    private readonly MenuActions _menus;
+    private readonly KeyboardGuard _guard;
 
     public BatchTool(SessionManager sessionManager, ElementRegistry elementRegistry, ClickExecutor clickExecutor)
         : this(sessionManager, elementRegistry, clickExecutor, new DialogMonitor(), new PendingOperationRegistry())
@@ -52,22 +55,16 @@ public class BatchTool : ToolBase
         _pending = pending;
         _finder = new ElementFinder(sessionManager, elementRegistry, dialogs, pending);
         _post = post;
+        _state = new StateActions(clickExecutor);
+        _menus = new MenuActions(sessionManager, elementRegistry, clickExecutor);
+        _guard = new KeyboardGuard(sessionManager);
     }
 
     public override string Name => "windows_batch";
 
     public override string Description =>
-        "Execute multiple actions in a single call. Much faster than individual calls. " +
-        "Actions: click, type, fill, keys (chords like Ctrl+Shift+B, to the focused element or a ref/selector), " +
-        "wait, snapshot, dialog_press, dialog_set_text. " +
-        "Target elements by ref, or by selector (name / nameContains / automationId / role, optionally " +
-        "handle to limit the search to one window; handle \"$dialog\" is the dialog the batch last saw open), " +
-        "so a whole flow can run without a snapshot in between. " +
-        "wait takes ms, or until=dialog_open | dialog_closed | element | element_gone | text_contains (+ timeoutMs). " +
-        "A click that opens a dialog stops the batch, unless the next action is wait until=dialog_open: then the " +
-        "dialog is expected and the batch goes on (dialog_press/dialog_set_text default to that dialog). " +
-        "noDialog=true on a click skips the 250ms dialog-settle wait. " +
-        "The result ends with a bounded snapshot of the window shown after the last action (postSnapshot=false to skip).";
+        
+        "Run many actions in one call (much faster than one call each). Actions: click, type, fill, keys, check, uncheck, expand, collapse, select (option), set_value, menu (path), wait (ms, or until=dialog_open|dialog_closed|element|element_gone|text_contains), snapshot, dialog_press, dialog_set_text. Target by ref or by name/nameContains/automationId/role, with handle to limit the search to one window (\"$dialog\": the dialog this batch last saw open). A dialog stops the batch unless the next action is wait until=dialog_open. Ends with what changed.";
 
     public override object InputSchema => new
     {
@@ -86,7 +83,7 @@ public class BatchTool : ToolBase
                         action = new
                         {
                             type = "string",
-                            @enum = new[] { "click", "type", "fill", "keys", "wait", "snapshot", "dialog_press", "dialog_set_text" },
+                            @enum = new[] { "click", "type", "fill", "keys", "check", "uncheck", "expand", "collapse", "select", "set_value", "menu", "wait", "snapshot", "dialog_press", "dialog_set_text" },
                             description = "Action type"
                         },
                         @ref = new
@@ -123,7 +120,18 @@ public class BatchTool : ToolBase
                         value = new
                         {
                             type = "string",
-                            description = "Value for fill action"
+                            description = "Value for fill and set_value"
+                        },
+                        option = new
+                        {
+                            type = "string",
+                            description = "For select: the item to pick in a combo box, list, tree or tab list (omit to select the element itself)"
+                        },
+                        path = new
+                        {
+                            type = "array",
+                            items = new { type = "string" },
+                            description = "For menu: items to open in order, e.g. [\"File\", \"Save As...\"] (a \"File > Save As...\" string works too)"
                         },
                         keys = new
                         {
@@ -287,6 +295,15 @@ public class BatchTool : ToolBase
 
         switch (step.Action)
         {
+            case "check":
+            case "uncheck":
+            case "expand":
+            case "collapse":
+            case "select":
+            case "set_value":
+                return await ExecuteStateAsync(steps, index, run);
+            case "menu":
+                return await ExecuteMenuAsync(steps, index, run);
             case "click":
                 return await ExecuteClickAsync(steps, index, run);
             case "type":
@@ -312,7 +329,8 @@ public class BatchTool : ToolBase
     // ---------- element actions ----------
 
     /// <summary>The step's element, from its ref or selector.</summary>
-    private (AutomationElement? Element, string? Ref, string? Error) Resolve(BatchStep step, Run run)
+    /// <param name="forgiving">Loose name matching and near-miss suggestions (see ElementFinder.Find).</param>
+    private (AutomationElement? Element, string? Ref, string? Error) Resolve(BatchStep step, Run run, bool forgiving = true)
     {
         if (!string.IsNullOrEmpty(step.Ref))
         {
@@ -321,7 +339,7 @@ public class BatchTool : ToolBase
         }
         if (step.Selector != null)
         {
-            var found = _finder.Find(step.Selector, run.LastDialog, out var error);
+            var found = _finder.Find(step.Selector, run.LastDialog, out var error, forgiving);
             return found == null ? (null, null, error) : (found.Element, found.Ref, null);
         }
         return (null, null, null);
@@ -344,18 +362,90 @@ public class BatchTool : ToolBase
 
         run.Baseline = _dialogs.GetDialogs(null);
         var click = await _clickExecutor.ClickAsync(element, new ClickRequest(refId, mode, Options: options));
-        run.LastAction = new PostActionContext("batch", click.ProcessId, click.WindowHwnd, click.NewDialogs);
-        RememberDialogs(run, click.NewDialogs);
+        return AfterAction(steps, index, run, click, step.Ref == null ? $"{step.Selector!.Describe()} -> {refId}: " : "");
+    }
 
-        var text = step.Ref == null ? $"{step.Selector!.Describe()} -> {refId}: {click.Text}" : click.Text;
-        if (BatchPlan.StopAfterClick(click.DialogOpened, click.StillRunning, steps, index))
+    /// <summary>Record what a click-like action did, and stop the batch on an unexpected dialog.</summary>
+    private StepResult AfterAction(IReadOnlyList<BatchStep> steps, int index, Run run, ClickResult result, string prefix)
+    {
+        run.LastAction = new PostActionContext("batch", result.ProcessId, result.WindowHwnd, result.NewDialogs);
+        RememberDialogs(run, result.NewDialogs);
+
+        var text = prefix + result.Text;
+        if (BatchPlan.StopAfterClick(result.DialogOpened, result.StillRunning, steps, index))
         {
-            return new StepResult(text, click.IsError, Stop: true,
-                StopNote: $"Stopped after action {index + 1}: a dialog opened or the click is still pending. " +
+            return new StepResult(text, result.IsError, Stop: true,
+                StopNote: $"Stopped after action {index + 1}: a dialog opened or the action is still pending. " +
                           "Handle it, then continue with the remaining actions. (If the dialog was expected, " +
-                          "put a wait with until=dialog_open right after the click.)");
+                          "put a wait with until=dialog_open right after it.)");
         }
-        return new StepResult(text, click.IsError);
+        return new StepResult(text, result.IsError);
+    }
+
+    private ActionRunOptions OptionsFor(IReadOnlyList<BatchStep> steps, int index) =>
+        BatchPlan.SettleTime(steps, index) is { } settle ? new ActionRunOptions { SettleTime = settle } : new ActionRunOptions();
+
+    private async Task<StepResult> ExecuteStateAsync(IReadOnlyList<BatchStep> steps, int index, Run run)
+    {
+        var step = steps[index];
+        var (element, refId, error) = Resolve(step, run);
+        if (error != null) return new StepResult(error, true);
+        if (element == null || refId == null) return new StepResult($"{step.Action} needs a ref or selector", true);
+        if (step.Action == "set_value" && step.Value == null) return new StepResult("set_value needs 'value'", true);
+
+        var options = OptionsFor(steps, index);
+        run.Baseline = _dialogs.GetDialogs(null);
+        var result = step.Action switch
+        {
+            "check" => await _state.SetCheckedAsync(element, refId, true, options),
+            "uncheck" => await _state.SetCheckedAsync(element, refId, false, options),
+            "expand" => await _state.SetExpandedAsync(element, refId, true, options),
+            "collapse" => await _state.SetExpandedAsync(element, refId, false, options),
+            "select" => await _state.SelectAsync(element, refId, step.Option, options),
+            _ => await _state.SetValueAsync(element, refId, step.Value!, options),
+        };
+        return AfterAction(steps, index, run, result, step.Ref == null ? $"{step.Selector!.Describe()} -> {refId}: " : "");
+    }
+
+    private async Task<StepResult> ExecuteMenuAsync(IReadOnlyList<BatchStep> steps, int index, Run run)
+    {
+        var step = steps[index];
+        if (step.Path is not { Count: > 0 }) return new StepResult("menu needs 'path', e.g. [\"File\", \"Save As...\"] or \"File > Save As...\"", true);
+        if (!ClickTool.TryParseMode(step.Mode, out var mode)) return new StepResult("mode must be one of: auto, invoke, input", true);
+
+        // A ref or selector is the element whose context menu to open.
+        (AutomationElement, string)? context = null;
+        string? handle;
+        if (step.Ref != null || step.Selector != null)
+        {
+            var (element, refId, error) = Resolve(step, run);
+            if (error != null) return new StepResult(error, true);
+            if (element == null || refId == null) return new StepResult("Element not found", true);
+            context = (element, refId);
+            handle = ElementRegistry.WindowHandleOf(refId);
+        }
+        else
+        {
+            handle = step.Handle == ElementSelector.LastDialog ? run.LastDialog : step.Handle;
+            handle ??= ForegroundHandle();
+        }
+        if (handle == null) return new StepResult("menu needs 'handle' (no app window is in the foreground)", true);
+        var window = _sessionManager.GetWindow(handle);
+        if (window == null) return new StepResult($"Window not found: {handle}", true);
+
+        run.Baseline = _dialogs.GetDialogs(null);
+        var result = await _menus.OpenAsync(handle, window, step.Path, mode, context, OptionsFor(steps, index));
+        return AfterAction(steps, index, run, result, "");
+    }
+
+    /// <summary>The foreground window, if it belongs to an app being automated.</summary>
+    private string? ForegroundHandle()
+    {
+        var foreground = NativeMethods.GetForegroundWindow();
+        var pid = foreground != 0 ? NativeMethods.GetProcessId(foreground) : 0;
+        return pid != 0 && _sessionManager.TrackedProcessIds.Contains(pid)
+            ? _sessionManager.RegisterNativeWindow(foreground, pid)
+            : null;
     }
 
     private StepResult Act(Run run, BatchStep step, Func<BatchStep, AutomationElement?, string> action)
@@ -379,7 +469,7 @@ public class BatchTool : ToolBase
         return new StepResult(text, false);
     }
 
-    private static string ExecuteType(BatchStep step, AutomationElement? element)
+    private string ExecuteType(BatchStep step, AutomationElement? element)
     {
         var text = step.Text;
         if (string.IsNullOrEmpty(text))
@@ -393,6 +483,7 @@ public class BatchTool : ToolBase
             Thread.Sleep(30);
         }
 
+        if (_guard.Check(element) is { } refusal) throw new InvalidOperationException(refusal);
         Keyboard.Type(text);
         return $"Typed \"{text}\"";
     }
@@ -410,6 +501,7 @@ public class BatchTool : ToolBase
             Thread.Sleep(30);
         }
 
+        if (_guard.Check(element) is { } refusal) return new StepResult(refusal, true);
         run.Baseline = _dialogs.GetDialogs(null);
         if (!SendKeysTool.TrySendSequence(step.Keys, out var sent, out var keyError))
         {
@@ -447,7 +539,7 @@ public class BatchTool : ToolBase
         return new StepResult(text, false);
     }
 
-    private static string ExecuteFill(BatchStep step, AutomationElement? element)
+    private string ExecuteFill(BatchStep step, AutomationElement? element)
     {
         var value = step.Value;
         if (element == null || value == null)
@@ -464,6 +556,7 @@ public class BatchTool : ToolBase
         // Fallback
         element.Focus();
         Thread.Sleep(30);
+        if (_guard.Check(element) is { } refusal) throw new InvalidOperationException($"No Value pattern, so filling needs the keyboard. {refusal}");
         Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_A);
         Thread.Sleep(30);
         Keyboard.Type(value);
@@ -546,9 +639,9 @@ public class BatchTool : ToolBase
         string? lastText = null;
         string? lastRef = null;
         string? lastError = null;
-        var met = await PollAsync(() =>
+        bool Check(bool forgiving)
         {
-            var (element, refId, error) = Resolve(step, run);
+            var (element, refId, error) = Resolve(step, run, forgiving);
             lastError = error;
             lastRef = refId;
             switch (step.Until)
@@ -562,7 +655,12 @@ public class BatchTool : ToolBase
                     try { lastText = ElementText.Read(element); } catch { lastText = null; }
                     return BatchPlan.TextMatches(lastText, step.Text!);
             }
-        }, timeout);
+        }
+
+        // Poll with exact matching (cheap); on timeout, one forgiving look: a loose name match
+        // may satisfy it, and otherwise the error lists the closest names.
+        var met = await PollAsync(() => Check(forgiving: false), timeout)
+                  || (step.Until != WaitConditions.ElementGone && step.Selector?.CanForgive == true && Check(forgiving: true));
 
         var what = step.Selector?.Describe() ?? step.Ref;
         if (met)

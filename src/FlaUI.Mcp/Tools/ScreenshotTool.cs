@@ -22,7 +22,8 @@ public class ScreenshotTool : ToolBase
     public override string Name => "windows_screenshot";
 
     public override string Description => 
-        "Take a screenshot of a window or specific element. Returns the image as base64-encoded PNG.";
+        
+        "PNG of a window or element, for when the accessibility tree doesn't show what you need.";
 
     public override object InputSchema => new
     {
