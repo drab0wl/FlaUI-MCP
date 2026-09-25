@@ -4,6 +4,7 @@ using System.Text.Json;
 using PlaywrightWindows.Mcp.Core;
 using PlaywrightWindows.Mcp.Core.Actions;
 using PlaywrightWindows.Mcp.Core.Dialogs;
+using PlaywrightWindows.Mcp.Core.Win32;
 
 namespace PlaywrightWindows.Mcp.Tools;
 
@@ -100,10 +101,13 @@ public class DialogsTool : ToolBase
 public class NativeDialogTool : ToolBase
 {
     private readonly SessionManager _sessions;
+    private readonly PostActionSnapshotter? _post;
+    private readonly DialogMonitor _monitor = new();
 
-    public NativeDialogTool(SessionManager sessions)
+    public NativeDialogTool(SessionManager sessions, PostActionSnapshotter? post = null)
     {
         _sessions = sessions;
+        _post = post;
     }
 
     public override string Name => "windows_dialog";
@@ -114,7 +118,8 @@ public class NativeDialogTool : ToolBase
         "dialog. action=read lists the dialog's controls with refs (c1, c2...). action=press clicks a button " +
         "by text ('Yes', '&Save'), ref ('c3') or standard name (ok, cancel, yes, no, retry, ignore, abort, close). " +
         "action=set_text types into an edit box by ref. action=close sends WM_CLOSE (like the title-bar X). Cannot see inside WPF or task-dialog content; use " +
-        "windows_snapshot for those.";
+        "windows_snapshot for those. After press, the result ends with a snapshot of what the app shows next " +
+        "(postSnapshot=false to skip).";
 
     public override object InputSchema => new
     {
@@ -125,7 +130,8 @@ public class NativeDialogTool : ToolBase
             action = new { type = "string", @enum = new[] { "read", "press", "set_text", "close" }, description = "Default: read" },
             button = new { type = "string", description = "For press: button text, control ref, or standard name" },
             control = new { type = "string", description = "For set_text: control ref from action=read (e.g. 'c4')" },
-            text = new { type = "string", description = "For set_text: the text" }
+            text = new { type = "string", description = "For set_text: the text" },
+            postSnapshot = new { type = "boolean", description = "For press: append a snapshot of the window shown next (default: true)" }
         },
         required = new[] { "handle" }
     };
@@ -173,6 +179,9 @@ public class NativeDialogTool : ToolBase
                 {
                     return Task.FromResult(ErrorResult($"{target.Ref} \"{target.Text}\" is disabled."));
                 }
+                var pid = NativeMethods.GetProcessId(hwnd);
+                var owner = NativeMethods.GetWindow(hwnd, NativeMethods.GW_OWNER);
+                var baseline = _monitor.GetDialogs(new HashSet<int> { pid });
                 if (!NativeDialog.Press(target))
                 {
                     return Task.FromResult(ErrorResult($"Could not post a click to {target.Ref}."));
@@ -180,9 +189,15 @@ public class NativeDialogTool : ToolBase
 
                 // The press is posted, so give the app a moment before reporting.
                 var closed = WaitUntil(() => !DialogMonitor.IsOpen(hwnd), TimeSpan.FromMilliseconds(750));
-                return Task.FromResult(TextResult(
-                    $"Pressed {target.Ref} \"{target.Text}\" in {handle}. " +
-                    (closed ? "The dialog closed." : "The dialog is still open.")));
+                var text = $"Pressed {target.Ref} \"{target.Text}\" in {handle}. " +
+                           (closed ? "The dialog closed." : "The dialog is still open.");
+                if (_post != null && _post.IsEnabled(GetArgument<bool?>(arguments, "postSnapshot")))
+                {
+                    var opened = DialogClassifier.NewSince(baseline, _monitor.GetDialogs(new HashSet<int> { pid }));
+                    text = PostActionSnapshotter.Append(text, _post.Capture(
+                        new PostActionContext("press", pid, closed ? owner : hwnd, opened)));
+                }
+                return Task.FromResult(TextResult(text));
             }
 
             case "set_text":
@@ -224,7 +239,7 @@ public class NativeDialogTool : ToolBase
         }
     }
 
-    private static string Read(string handle, nint hwnd, IReadOnlyList<NativeControl> controls)
+    internal static string Read(string handle, nint hwnd, IReadOnlyList<NativeControl> controls)
     {
         var info = DialogMonitor.Describe(hwnd);
         var sb = new StringBuilder();

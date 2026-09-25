@@ -1,6 +1,5 @@
 using System.Drawing;
 using System.Text;
-using System.Text.RegularExpressions;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Input;
 using PlaywrightWindows.Mcp.Core.Actions;
@@ -30,7 +29,17 @@ public sealed record ClickRequest(
     bool DoubleClick = false,
     ActionRunOptions? Options = null);
 
-public sealed record ClickResult(string Text, bool IsError, bool DialogOpened, bool StillRunning);
+public sealed record ClickResult(string Text, bool IsError, bool DialogOpened, bool StillRunning)
+{
+    /// <summary>Process the click went to (0 if it never got that far).</summary>
+    public int ProcessId { get; init; }
+
+    /// <summary>Top-level window of the clicked element, when known from its ref.</summary>
+    public nint WindowHwnd { get; init; }
+
+    /// <summary>Dialogs the click opened.</summary>
+    public IReadOnlyList<DialogInfo> NewDialogs { get; init; } = Array.Empty<DialogInfo>();
+}
 
 /// <summary>
 /// Performs clicks without ever hanging on a modal dialog: the UIA call runs on its own
@@ -95,7 +104,7 @@ public sealed class ClickExecutor
             () => DialogClassifier.NewSince(baseline, _dialogs.GetDialogs(pids)),
             request.Options);
 
-        return Format(outcome);
+        return Format(outcome) with { ProcessId = pid, WindowHwnd = windowHwnd, NewDialogs = outcome.NewDialogs };
     }
 
     private static bool HasActionPattern(AutomationElement element) =>
@@ -125,12 +134,8 @@ public sealed class ClickExecutor
             $"{name} supports no Invoke, Toggle or SelectionItem pattern. Use mode=input for a mouse click.");
     }
 
-    /// <summary>Refs look like "w3e12"; "w3" is the top-level window the element was snapshotted from.</summary>
-    private nint WindowHwndForRef(string refId)
-    {
-        var match = Regex.Match(refId, @"^(w\d+)e\d+$");
-        return match.Success ? _sessions.GetHwnd(match.Groups[1].Value) : 0;
-    }
+    private nint WindowHwndForRef(string refId) =>
+        ElementRegistry.WindowHandleOf(refId) is { } handle ? _sessions.GetHwnd(handle) : 0;
 
     private static string ClickWithInput(AutomationElement element, string name, int pid, nint windowHwnd, ClickRequest request)
     {

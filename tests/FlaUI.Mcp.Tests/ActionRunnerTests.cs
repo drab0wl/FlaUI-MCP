@@ -160,4 +160,17 @@ public class ActionRunnerTests
         Assert.True(Responsiveness.Probe(() => { }, TimeSpan.FromSeconds(1)));
         Assert.True(Responsiveness.Probe(() => throw new Exception("stale element"), TimeSpan.FromSeconds(1)));
     }
+
+    [Fact]
+    public async Task ZeroSettle_ReturnsAsSoonAsTheActionDoes()
+    {
+        var runner = new ActionRunner(new PendingOperationRegistry());
+        var options = Fast(settleMs: 0) with { SettleTime = TimeSpan.Zero };
+
+        var sw = Stopwatch.StartNew();
+        var outcome = await runner.RunAsync("click OK", 1, () => "Invoked OK", None, options);
+
+        Assert.Equal(ActionState.Completed, outcome.State);
+        Assert.True(sw.Elapsed < TimeSpan.FromMilliseconds(150), $"took {sw.Elapsed}");
+    }
 }

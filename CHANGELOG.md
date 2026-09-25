@@ -15,6 +15,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `windows_dialog`: read, press buttons, set edit text, or close HWND-based dialogs (MessageBox, `#32770`, WinForms) with window messages, bypassing UI Automation.
 - `windows_wait`: wait for a pending click to finish, a dialog to open, or a dialog to close.
 - `FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS` environment variable to cap UIA call time.
+- Action results include post-action state: `windows_click`, `windows_fill`, `windows_dialog` press and `windows_batch` append a bounded snapshot of the dialog the action opened, or the app's foreground window. `postSnapshot: false` or `FLAUI_MCP_POST_SNAPSHOT=0` turns it off; `FLAUI_MCP_POST_SNAPSHOT_MAX_NODES` / `_MAX_CHARS` bound it.
+- `windows_batch` selectors (`name`, `nameContains`, `automationId`, `role`, `handle`, `index`), condition waits (`until`: `dialog_open`, `dialog_closed`, `element`, `element_gone`, `text_contains`), and `dialog_press` / `dialog_set_text` actions. A click followed by `wait until=dialog_open` no longer stops the batch.
+- `settleMs` on `windows_click`, and `noDialog` / `settleMs` on batch clicks, to skip or shorten the 250 ms dialog-settle wait.
+- Per-tool timing on stderr (`[timing] ...`: execution, status-block time, and the gap between calls), with a periodic per-tool summary. `FLAUI_MCP_TIMING=0` disables it.
+- `FlaUI.Mcp.exe --bench-snapshot "<title>"` compares snapshot modes on a live window.
 - Test apps: MessageBox and input-bearing modal dialogs (WinForms and WPF); `ModalDialogTests` integration tests; unit tests for dialog classification, the action runner, the status block and Win32 button matching.
 
 ### Changed
@@ -22,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `windows_snapshot` fails fast with guidance, rather than timing out, when a pending click is holding the app's UIA provider.
 - `windows_screenshot` with a window handle captures the window's screen rectangle from its HWND, so it works while UIA is blocked.
 - Window handles are stable: registering the same window again returns the same handle.
+- Snapshots read element properties through a UIA `CacheRequest` (one call per element's children instead of about ten per element). `FLAUI_MCP_SNAPSHOT_MODE=live|cached|subtree` picks the strategy.
+- Element refs are stable across snapshots: an element seen in the previous snapshot of a window keeps its ref (matched by runtime id), and a bounded snapshot keeps the refs it didn't reach.
 
 ## [0.2.0] - 2026-07-08
 

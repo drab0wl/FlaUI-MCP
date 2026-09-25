@@ -98,16 +98,19 @@ public class TypeTool : ToolBase
 public class FillTool : ToolBase
 {
     private readonly ElementRegistry _elementRegistry;
+    private readonly PostActionSnapshotter? _post;
 
-    public FillTool(ElementRegistry elementRegistry)
+    public FillTool(ElementRegistry elementRegistry, PostActionSnapshotter? post = null)
     {
         _elementRegistry = elementRegistry;
+        _post = post;
     }
 
     public override string Name => "windows_fill";
 
     public override string Description => 
-        "Clear and fill a text field with new value. Prefers Value pattern for reliability.";
+        "Clear and fill a text field with new value. Prefers Value pattern for reliability. " +
+        "The result ends with a bounded snapshot of the app's foreground window (postSnapshot=false to skip).";
 
     public override object InputSchema => new
     {
@@ -123,6 +126,11 @@ public class FillTool : ToolBase
             {
                 type = "string",
                 description = "Value to fill"
+            },
+            postSnapshot = new
+            {
+                type = "boolean",
+                description = "Append a snapshot of the app's foreground window (default: true)"
             }
         },
         required = new[] { "ref", "value" }
@@ -159,7 +167,7 @@ public class FillTool : ToolBase
                 if (!valuePattern.IsReadOnly.ValueOrDefault)
                 {
                     valuePattern.SetValue(value);
-                    return Task.FromResult(TextResult($"Filled {elementName} with \"{value}\""));
+                    return Task.FromResult(TextResult(WithPostSnapshot($"Filled {elementName} with \"{value}\"", arguments, refId, element)));
                 }
             }
 
@@ -170,11 +178,17 @@ public class FillTool : ToolBase
             Thread.Sleep(50);
             Keyboard.Type(value);
 
-            return Task.FromResult(TextResult($"Filled {elementName} with \"{value}\""));
+            return Task.FromResult(TextResult(WithPostSnapshot($"Filled {elementName} with \"{value}\"", arguments, refId, element)));
         }
         catch (Exception ex)
         {
             return Task.FromResult(ErrorResult($"Failed to fill {refId}: {ex.Message}"));
         }
+    }
+
+    private string WithPostSnapshot(string text, JsonElement? arguments, string refId, FlaUI.Core.AutomationElements.AutomationElement element)
+    {
+        if (_post == null || !_post.IsEnabled(GetArgument<bool?>(arguments, "postSnapshot"))) return text;
+        return PostActionSnapshotter.Append(text, _post.CaptureAfter("fill", refId, element));
     }
 }

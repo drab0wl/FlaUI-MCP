@@ -232,6 +232,63 @@ FlaUI-MCP handles this:
 Set `FLAUI_MCP_UIA_TRANSACTION_TIMEOUT_MS` (for example `5000`) to make UIA calls against a
 blocked provider fail after that long instead of the UIA default.
 
+## Fewer Round Trips
+
+Driving an app one tool call at a time is slow: each step costs a model turn. FlaUI-MCP cuts
+the number of calls:
+
+- **Action results show what happened.** `windows_click`, `windows_fill`, `windows_dialog`
+  `action=press` and `windows_batch` end with a bounded snapshot (150 elements / 8000
+  characters by default) of the window you'll most likely act on next: the dialog the action
+  opened, else the app's foreground window. Its refs work immediately, and refs from an
+  earlier full snapshot of that window stay valid. Pass `postSnapshot: false` to skip it, or
+  set `FLAUI_MCP_POST_SNAPSHOT=0` to make that the default
+  (`FLAUI_MCP_POST_SNAPSHOT_MAX_NODES` / `_MAX_CHARS` change the bounds). While a pending click
+  blocks the app's UI Automation, the snapshot falls back to the dialog's Win32 controls.
+- **`windows_batch` finds elements itself.** Actions can target `name`, `nameContains`,
+  `automationId` and `role` (as printed in snapshots) instead of a ref, optionally limited to a
+  window with `handle` (`"$dialog"` is the dialog the batch last saw open). Waits can be for a
+  condition: `until` = `dialog_open`, `dialog_closed`, `element`, `element_gone`,
+  `text_contains`. `dialog_press` and `dialog_set_text` drive a dialog with Win32 messages.
+- **Expected dialogs don't stop a batch.** A click that opens a dialog still stops the batch,
+  unless the next action is `wait` with `until: "dialog_open"`.
+- **No settle wait when there's nothing to wait for.** Clicks watch for a dialog for 250 ms
+  after returning. `noDialog: true` (or `settleMs`) on a batch click, or `settleMs` on
+  `windows_click`, skips or shortens that; a click followed by `until: "dialog_open"` skips it.
+
+```json
+{ "actions": [
+  { "action": "click", "role": "tab", "name": "Dialogs", "handle": "w1", "noDialog": true },
+  { "action": "click", "name": "Delete", "role": "button", "handle": "w1" },
+  { "action": "wait", "until": "dialog_open" },
+  { "action": "dialog_press", "button": "yes" },
+  { "action": "wait", "until": "text_contains", "automationId": "StatusLabel", "handle": "w1", "text": "Deleted" }
+] }
+```
+
+**Faster snapshots.** Snapshots read each element's properties (name, automation id, control
+type, enabled/offscreen, pattern availability and toggle/selection/expand/read-only state)
+through a UI Automation `CacheRequest`, so each element's children arrive with all their
+properties in one cross-process call instead of about ten. `FLAUI_MCP_SNAPSHOT_MODE` picks
+`cached` (default), `subtree` (the whole tree in one call; can't stop early at the element
+limit) or `live` (the original per-property reads).
+
+**Measuring.** Each tool call writes a line to stderr (never stdout, the MCP channel):
+
+```
+[timing] snapshot 412ms handle=w1 mode=Cached nodes=812
+[timing] tool=windows_snapshot exec=415ms status=2ms gap=6120ms
+```
+
+`exec` is the tool's own time, `status` is the status-block scan, and `gap` is the time since
+the previous result was returned: the model's turn. A per-tool summary is written every 20
+calls and at exit. `FLAUI_MCP_TIMING=0` turns it off. To compare snapshot modes on a real
+window:
+
+```powershell
+FlaUI.Mcp.exe --bench-snapshot "Visual Studio" 5
+```
+
 ## How It Works
 
 ### The Accessibility Snapshot

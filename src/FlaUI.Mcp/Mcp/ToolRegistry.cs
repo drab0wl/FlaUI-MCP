@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Text.Json;
+using PlaywrightWindows.Mcp.Core.Diagnostics;
 
 namespace PlaywrightWindows.Mcp;
 
@@ -10,10 +12,12 @@ public class ToolRegistry
     private readonly Dictionary<string, ITool> _tools = new();
     private readonly TimeSpan _toolTimeout;
     private readonly IToolResultAnnotator? _annotator;
+    private readonly TimingLog _timing;
 
-    public ToolRegistry(TimeSpan? toolTimeout = null, IToolResultAnnotator? annotator = null)
+    public ToolRegistry(TimeSpan? toolTimeout = null, IToolResultAnnotator? annotator = null, TimingLog? timing = null)
     {
         _annotator = annotator;
+        _timing = timing ?? TimingLog.Shared;
         _toolTimeout = toolTimeout ?? TimeSpan.FromSeconds(30);
         if (_toolTimeout <= TimeSpan.Zero)
         {
@@ -33,8 +37,13 @@ public class ToolRegistry
 
     public async Task<McpToolResult> ExecuteToolAsync(string name, JsonElement? arguments)
     {
+        var gap = _timing.BeginCall();
+        var sw = Stopwatch.StartNew();
         var result = await ExecuteCoreAsync(name, arguments);
-        return Annotate(name, result);
+        var execution = sw.Elapsed;
+        var annotated = Annotate(name, result);
+        _timing.EndCall(name, execution, sw.Elapsed - execution, gap, result.IsError == true);
+        return annotated;
     }
 
     private McpToolResult Annotate(string name, McpToolResult result)

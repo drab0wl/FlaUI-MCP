@@ -157,6 +157,121 @@ public class ModalDialogTests : IDisposable
         Assert.DoesNotContain("2. wait", result);
     }
 
+    [Fact]
+    public async Task Batch_SelectorFlow_ExpectedDialogDoesNotStop()
+    {
+        var handle = _fixture.WinFormsHandle;
+        var (result, elapsed) = await Timed(() => _fixture.CallTool(_fixture.CreateBatchTool(), new
+        {
+            actions = new object[]
+            {
+                new { action = "click", role = "tab", name = "Dialogs", handle, noDialog = true },
+                new { action = "wait", until = "element", name = "Show Message Box", handle },
+                new { action = "click", selector = new { name = "Show Message Box", role = "button", handle } },
+                new { action = "wait", until = "dialog_open" },
+                new { action = "dialog_press", button = "no" },
+                new { action = "wait", until = "text_contains", automationId = "DialogStatusLabel", handle, text = "MessageBox result: No" },
+            }
+        }));
+        _output.WriteLine($"batch ({elapsed.TotalMilliseconds:0}ms): {result}");
+
+        Assert.DoesNotContain("Stopped", result);
+        Assert.Contains("4. wait: dialog opened: ", result);
+        Assert.Contains("Confirm Delete", result);
+        Assert.Contains("5. dialog_press: Pressed", result);
+        Assert.Contains("6. wait: ", result);
+        Assert.Contains("text contains \"MessageBox result: No\"", result);
+        Assert.Contains("--- after batch:", result);
+        await WaitForPendingToFinish();
+    }
+
+    [Fact]
+    public async Task Batch_Selectors_DriveWpfDialogWithUia()
+    {
+        var handle = _fixture.WpfHandle;
+        var result = await _fixture.CallTool(_fixture.CreateBatchTool(postSnapshot: false), new
+        {
+            actions = new object[]
+            {
+                new { action = "click", automationId = "DialogsTab", handle, noDialog = true },
+                new { action = "click", automationId = "OpenWpfDialogButton", handle },
+                new { action = "wait", until = "dialog_open" },
+                new { action = "fill", name = "Your name", handle = "$dialog", value = "Linus" },
+                new { action = "click", selector = new { name = "OK", role = "button", handle = "$dialog" } },
+                new { action = "wait", until = "dialog_closed" },
+                new { action = "wait", until = "text_contains", automationId = "DialogStatusLabel", handle, text = "name=Linus" },
+            }
+        });
+        _output.WriteLine(result);
+
+        Assert.DoesNotContain("Stopped", result);
+        Assert.Contains("WPF Test Dialog", result);
+        Assert.Contains("7. wait: ", result);
+        Assert.DoesNotContain("--- after", result);
+        await WaitForPendingToFinish();
+    }
+
+    [Fact]
+    public async Task Batch_SelectorMiss_StopsWithAnError()
+    {
+        var result = await _fixture.CallTool(_fixture.CreateBatchTool(postSnapshot: false), new
+        {
+            actions = new object[]
+            {
+                new { action = "click", name = "No Such Button", handle = _fixture.WinFormsHandle },
+                new { action = "wait", ms = 10 },
+            }
+        });
+        _output.WriteLine(result);
+
+        Assert.Contains("No element matches \"No Such Button\"", result);
+        Assert.Contains("Stopped at action 1 due to error", result);
+    }
+
+    [Fact]
+    public async Task Click_AppendsSnapshotOfTheDialogItOpened_WithUsableRefs()
+    {
+        var buttonRef = await NavigateToTabAndFind(_fixture.WinFormsHandle, "Dialogs", "Open Modal Dialog");
+        var post = _fixture.CreatePostAction();
+        var click = new ClickTool(_fixture.Elements, _fixture.Clicks, post);
+
+        var result = await _fixture.CallTool(click, new { @ref = buttonRef, mode = "input" });
+        _output.WriteLine(result);
+        var dialog = ExtractHandle(result, "Test Modal Dialog");
+        Assert.Contains($"--- after click: dialog it opened {dialog} \"Test Modal Dialog\" ---", result);
+
+        // The refs in the appended snapshot work without another windows_snapshot.
+        var inputRef = TestAppFixture.FindRefInSnapshot(result, "Your name");
+        var okRef = TestAppFixture.FindRefInSnapshot(result, "OK");
+        Assert.NotNull(inputRef);
+        Assert.NotNull(okRef);
+
+        var fill = await _fixture.CallTool(new FillTool(_fixture.Elements, post), new { @ref = inputRef, value = "Ada", postSnapshot = false });
+        Assert.DoesNotContain("--- after", fill);
+        var ok = await _fixture.CallTool(click, new { @ref = okRef, postSnapshot = false });
+        _output.WriteLine(ok);
+        Assert.DoesNotContain("--- after", ok);
+
+        await WaitForText(_fixture.WinFormsHandle, "Modal result: OK name=Ada");
+    }
+
+    [Fact]
+    public async Task DialogPress_AppendsSnapshotOfTheOwner()
+    {
+        var buttonRef = await NavigateToTabAndFind(_fixture.WinFormsHandle, "Dialogs", "Show Message Box");
+        var result = await _fixture.CallTool(_fixture.CreateClickTool(), new { @ref = buttonRef });
+        var dialog = ExtractHandle(result, "Confirm Delete");
+
+        var press = await _fixture.CallTool(new NativeDialogTool(_fixture.Session, _fixture.CreatePostAction()),
+            new { handle = dialog, action = "press", button = "no" });
+        _output.WriteLine(press);
+
+        Assert.Contains("The dialog closed", press);
+        Assert.Contains("--- after press:", press);
+        Assert.Contains("FlaUI-MCP Test App", press);
+        await WaitForPendingToFinish();
+    }
+
     private static string ExtractHandle(string result, string title)
     {
         var match = Regex.Match(result, $@"(w\d+) ""{Regex.Escape(title)}""");

@@ -33,6 +33,13 @@ public class TestAppFixture : IAsyncLifetime
 
     public ClickTool CreateClickTool() => new(Elements, Clicks);
 
+    /// <summary>Post-action snapshots on, whatever FLAUI_MCP_POST_SNAPSHOT says.</summary>
+    public PostActionSnapshotter CreatePostAction() =>
+        new(Session, Elements, Dialogs, Pending, new PostActionOptions { MaxNodes = 150, MaxChars = 8000 });
+
+    public BatchTool CreateBatchTool(bool postSnapshot = true) =>
+        new(Session, Elements, Clicks, Dialogs, Pending, postSnapshot ? CreatePostAction() : null);
+
     public string WinFormsHandle { get; private set; } = "";
     public string WpfHandle { get; private set; } = "";
 
