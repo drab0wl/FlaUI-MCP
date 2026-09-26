@@ -58,7 +58,11 @@ public class McpServer
             object? result = request.Method switch
             {
                 "initialize" => HandleInitialize(request),
-                "notifications/initialized" => null, // No response for notifications
+                // 2026-07-28 spec: no handshake; clients may ask for the same information this way.
+                "server/discover" => HandleInitialize(request),
+                "ping" => new { },
+                // Notifications (no id) never get a response, known or not.
+                _ when request.Method?.StartsWith("notifications/", StringComparison.Ordinal) == true => null,
                 "tools/list" => HandleToolsList(),
                 "tools/call" => await HandleToolCallAsync(request),
                 _ => throw new Exception($"Unknown method: {request.Method}")

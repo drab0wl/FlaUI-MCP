@@ -4,6 +4,7 @@ using System.Text.Json;
 using PlaywrightWindows.Mcp.Core;
 using PlaywrightWindows.Mcp.Core.Actions;
 using PlaywrightWindows.Mcp.Core.Dialogs;
+using PlaywrightWindows.Mcp.Core.Waiting;
 using PlaywrightWindows.Mcp.Core.Win32;
 
 namespace PlaywrightWindows.Mcp.Tools;
@@ -289,7 +290,7 @@ public class WaitTool : ToolBase
 
     public override string Description =>
         
-        "Wait for a pending click to finish (op), a new dialog (until=dialog_open), or a dialog to close (until=dialog_closed + handle). Returns as soon as it happens.";
+        "Wait for a pending click to finish (op), a new dialog (until=dialog_open), a dialog to close (until=dialog_closed + handle), or an app to go idle (until=idle: it answers, no progress bar is running, and the UI stays unchanged for stableMs; handle, default the app's foreground window). Returns as soon as it happens.";
 
     public override object InputSchema => new
     {
@@ -299,12 +300,13 @@ public class WaitTool : ToolBase
             until = new
             {
                 type = "string",
-                @enum = new[] { "op_done", "dialog_open", "dialog_closed" },
+                @enum = new[] { "op_done", "dialog_open", "dialog_closed", "idle" },
                 description = "What to wait for (default: op_done if op is given)"
             },
             op = new { type = "string", description = "Pending operation id, e.g. 'op2'" },
             handle = new { type = "string", description = "Dialog handle for until=dialog_closed" },
-            timeoutMs = new { type = "integer", description = "Default 10000, max 25000" }
+            timeoutMs = new { type = "integer", description = "Default 10000, max 25000" },
+            stableMs = new { type = "integer", description = "For until=idle: how long the UI must stay unchanged (default 500)" }
         }
     };
 
@@ -369,19 +371,43 @@ public class WaitTool : ToolBase
                     : $"{handle} is still open after {timeout.TotalMilliseconds:0}ms.");
             }
 
+            case "idle":
+            {
+                var handle = GetStringArgument(arguments, "handle");
+                nint hwnd;
+                if (handle != null)
+                {
+                    hwnd = _sessions.GetHwnd(handle);
+                    if (hwnd == 0) return ErrorResult($"Unknown window handle {handle}.");
+                }
+                else
+                {
+                    var foreground = NativeMethods.GetForegroundWindow();
+                    var pid = foreground != 0 ? NativeMethods.GetProcessId(foreground) : 0;
+                    if (pid == 0 || !_sessions.TrackedProcessIds.Contains(pid))
+                    {
+                        return ErrorResult("until=idle needs 'handle': no app being automated is in the foreground.");
+                    }
+                    hwnd = foreground;
+                    handle = _sessions.RegisterNativeWindow(hwnd, pid);
+                }
+                var stableMs = GetArgument<int?>(arguments, "stableMs");
+                var stable = stableMs is > 0 ? TimeSpan.FromMilliseconds(stableMs.Value) : IdleWaiter.DefaultStable;
+                var (idle, state) = await new IdleWaiter(_sessions, _pending).WaitAsync(hwnd, timeout, stable);
+                return idle
+                    ? TextResult($"{handle} is idle ({state}).")
+                    : TextResult($"{handle} is not idle after {timeout.TotalMilliseconds:0}ms: {state}.");
+            }
+
             default:
-                return ErrorResult("until must be op_done, dialog_open or dialog_closed");
+                return ErrorResult("until must be op_done, dialog_open, dialog_closed or idle");
         }
     }
 
-    private static async Task<bool> PollAsync(Func<bool> condition, TimeSpan timeout)
+    /// <summary>Re-checks as soon as a new window opens anywhere (events), else every 250ms.</summary>
+    private async Task<bool> PollAsync(Func<bool> condition, TimeSpan timeout)
     {
-        var sw = Stopwatch.StartNew();
-        while (true)
-        {
-            if (condition()) return true;
-            if (sw.Elapsed >= timeout) return false;
-            await Task.Delay(50);
-        }
+        using var watcher = UiaChangeWatcher.Start(_sessions.Automation, null);
+        return await Poll.UntilAsync(condition, timeout, watcher.Signal, TimeSpan.FromMilliseconds(250));
     }
 }

@@ -141,6 +141,9 @@ namespace WpfTestApp
         public string Value { get; set; } = "";
 
         public event PropertyChangedEventHandler? PropertyChanged;
+
+        // A data grid row's accessible name comes from ToString.
+        public override string ToString() => $"{ID} {Name}";
     }
 
     public class FileItem

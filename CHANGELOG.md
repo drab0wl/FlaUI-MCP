@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- `until: "idle"` for batch waits and `windows_wait`: the app answers messages, no progress bar is running, and the UI is unchanged for `stableMs`.
+- `onDialog` on `windows_batch`: standing answers (`title` / `titleContains` / `textContains` + `press`) for prompts that may appear; a matching dialog is answered instead of stopping the batch.
+- Virtualized lists and trees: when a name isn't found, selectors and `windows_find` ask ItemContainer for the item and realize it.
+- Waits are driven by UI Automation events (window opened/closed, structure and property changes), with 250 ms polling as a fallback.
+- `windows_screenshot annotate=true`: draws refs of interactive elements on the image and lists them.
+- Saved flows: `saveAs` / `description` / `params` on `windows_batch` save a batch that finished cleanly (refs rewritten as selectors, values turned into `{{parameters}}`); `windows_run_flow` runs or lists them.
+- `server/discover` and `ping` are answered (2026-07-28 spec), alongside `initialize` for older clients; unknown notifications are ignored instead of getting an error reply.
+- Test app: WPF data grid rows are named "ITEM-001 Test Item 1" (`GridItem.ToString`).
 - `windows_screenshot` `output`: `file` saves the PNG (to `savePath`, else a temp file) and returns its path and size; `preview` also returns a JPEG of at most 800px. The default stays `image`.
 - Forgiving names: selectors (batch, `windows_find`, the new tools), menu paths and options match loosely ("Save As" finds "Save &As...", shortcut text ignored), and a miss lists the closest names with refs.
 - `windows_set`: checked / expanded / selected / option / value, acting only if the state differs. Options open combo boxes when needed and realize virtualized list items. Also batch actions `check`, `uncheck`, `expand`, `collapse`, `select`, `set_value`.

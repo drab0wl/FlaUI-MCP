@@ -8,6 +8,8 @@ using PlaywrightWindows.Mcp.Core.Actions;
 using PlaywrightWindows.Mcp.Core.Batch;
 using PlaywrightWindows.Mcp.Core.Diagnostics;
 using PlaywrightWindows.Mcp.Core.Dialogs;
+using PlaywrightWindows.Mcp.Core.Flows;
+using PlaywrightWindows.Mcp.Core.Waiting;
 using PlaywrightWindows.Mcp.Core.Snapshots;
 using PlaywrightWindows.Mcp.Core.Win32;
 
@@ -33,6 +35,8 @@ public class BatchTool : ToolBase
     private readonly StateActions _state;
     private readonly MenuActions _menus;
     private readonly KeyboardGuard _guard;
+    private readonly IdleWaiter _idle;
+    private readonly FlowStore? _flows;
 
     public BatchTool(SessionManager sessionManager, ElementRegistry elementRegistry, ClickExecutor clickExecutor)
         : this(sessionManager, elementRegistry, clickExecutor, new DialogMonitor(), new PendingOperationRegistry())
@@ -45,7 +49,8 @@ public class BatchTool : ToolBase
         ClickExecutor clickExecutor,
         DialogMonitor dialogs,
         PendingOperationRegistry pending,
-        PostActionSnapshotter? post = null)
+        PostActionSnapshotter? post = null,
+        FlowStore? flows = null)
     {
         _sessionManager = sessionManager;
         _elementRegistry = elementRegistry;
@@ -58,13 +63,15 @@ public class BatchTool : ToolBase
         _state = new StateActions(clickExecutor);
         _menus = new MenuActions(sessionManager, elementRegistry, clickExecutor);
         _guard = new KeyboardGuard(sessionManager);
+        _idle = new IdleWaiter(sessionManager, pending);
+        _flows = flows;
     }
 
     public override string Name => "windows_batch";
 
     public override string Description =>
         
-        "Run many actions in one call (much faster than one call each). Actions: click, type, fill, keys, check, uncheck, expand, collapse, select (option), set_value, menu (path), wait (ms, or until=dialog_open|dialog_closed|element|element_gone|text_contains), snapshot, dialog_press, dialog_set_text. Target by ref or by name/nameContains/automationId/role, with handle to limit the search to one window (\"$dialog\": the dialog this batch last saw open). A dialog stops the batch unless the next action is wait until=dialog_open. Ends with what changed.";
+        "Run many actions in one call (much faster than one call each). Actions: click, type, fill, keys, check, uncheck, expand, collapse, select (option), set_value, menu (path), wait (ms, or until=dialog_open|dialog_closed|element|element_gone|text_contains|idle), snapshot, dialog_press, dialog_set_text. Target by ref or by name/nameContains/automationId/role, with handle to limit the search to one window (\"$dialog\": the dialog this batch last saw open). A dialog stops the batch unless the next action is wait until=dialog_open or an onDialog rule answers it. saveAs keeps a batch that worked as a flow. Ends with what changed.";
 
     public override object InputSchema => new
     {
@@ -148,7 +155,12 @@ public class BatchTool : ToolBase
                         {
                             type = "string",
                             @enum = WaitConditions.All,
-                            description = "Wait for a condition instead of a fixed time"
+                            description = "Wait for a condition instead of a fixed time. idle: the app answers, no progress bar is running and the UI stays unchanged for stableMs"
+                        },
+                        stableMs = new
+                        {
+                            type = "integer",
+                            description = "For until=idle: how long the UI must stay unchanged (default 500)"
                         },
                         timeoutMs = new
                         {
@@ -189,6 +201,24 @@ public class BatchTool : ToolBase
                     required = new[] { "action" }
                 }
             },
+            onDialog = new
+            {
+                type = "array",
+                description = "Standing answers for dialogs that may pop up, e.g. [{\"titleContains\": \"Save changes\", \"press\": \"no\"}] " +
+                              "(title / titleContains / textContains + press). A matching dialog is answered instead of stopping the batch.",
+                items = new { type = "object" }
+            },
+            saveAs = new
+            {
+                type = "string",
+                description = "If the batch finishes cleanly, save it as a reusable flow with this name (see windows_run_flow). Refs become selectors."
+            },
+            description = new { type = "string", description = "With saveAs: what the flow does" },
+            @params = new
+            {
+                type = "object",
+                description = "With saveAs: values to turn into flow parameters, e.g. {\"file\": \"Report.txt\"} makes every \"Report.txt\" a {{file}} argument"
+            },
             stopOnError = new
             {
                 type = "boolean",
@@ -213,6 +243,12 @@ public class BatchTool : ToolBase
 
         /// <summary>For the post-action snapshot.</summary>
         public PostActionContext? LastAction { get; set; }
+
+        /// <summary>Standing answers for dialogs (onDialog).</summary>
+        public IReadOnlyList<DialogRule> Rules { get; init; } = Array.Empty<DialogRule>();
+
+        /// <summary>Dialogs already open when the batch started: never auto-answered.</summary>
+        public HashSet<nint> OpenAtStart { get; init; } = new();
     }
 
     private sealed record StepResult(string Text, bool IsError, bool Stop = false, string? StopNote = null);
@@ -231,10 +267,18 @@ public class BatchTool : ToolBase
             stopOnError = stopProp.GetBoolean();
         }
 
+        var rules = DialogRules.Parse(arguments, out var rulesError);
+        if (rulesError != null) return ErrorResult(rulesError);
+
         var steps = actionsElement.EnumerateArray().Select(BatchStep.Parse).ToList();
         var results = new List<string>();
-        var run = new Run();
+        var run = new Run
+        {
+            Rules = rules,
+            OpenAtStart = rules.Count > 0 ? _dialogs.GetDialogs(null).Select(d => d.Hwnd).ToHashSet() : new HashSet<nint>(),
+        };
         var lastWasSnapshot = false;
+        var clean = true;
 
         for (var index = 0; index < steps.Count; index++)
         {
@@ -244,6 +288,12 @@ public class BatchTool : ToolBase
                 results.Add($"Stopped before action {index + 1}: the batch used its {Budget.TotalSeconds:0}s time budget. " +
                             "Continue with the remaining actions in another call.");
                 break;
+            }
+
+            // A dialog that popped up since the last step (not one this step waits for).
+            if (!step.IsWaitFor(WaitConditions.DialogOpen))
+            {
+                results.AddRange(await AnswerDialogsAsync(run));
             }
 
             var sw = Stopwatch.StartNew();
@@ -263,16 +313,37 @@ public class BatchTool : ToolBase
                 ? $"{index + 1}. {result.Text}"
                 : $"{index + 1}. {step.Action}: {result.Text}");
 
+            if (result.Stop && run.Rules.Count > 0)
+            {
+                // The dialog that stopped the batch may be one it has an answer for.
+                var answered = await AnswerDialogsAsync(run);
+                results.AddRange(answered);
+                if (answered.Count > 0 && !_dialogs.GetDialogs(_sessionManager.TrackedProcessIds).Any(d => d.IsBlocking && !run.OpenAtStart.Contains(d.Hwnd)))
+                {
+                    result = result with { Stop = false };
+                }
+            }
             if (result.Stop)
             {
+                clean = false;
                 if (index + 1 < steps.Count && result.StopNote != null) results.Add(result.StopNote);
                 break;
             }
-            if (result.IsError && stopOnError)
+            if (result.IsError)
             {
-                results.Add($"Stopped at action {index + 1} due to error");
-                break;
+                clean = false;
+                if (stopOnError)
+                {
+                    results.Add($"Stopped at action {index + 1} due to error");
+                    break;
+                }
             }
+        }
+        if (run.Rules.Count > 0) results.AddRange(await AnswerDialogsAsync(run));
+
+        if (GetStringArgument(arguments, "saveAs") is { } saveAs)
+        {
+            results.Add(clean ? SaveFlow(saveAs, arguments.Value, actionsElement) : $"Not saved as \"{saveAs}\": the batch didn't finish cleanly.");
         }
 
         var text = string.Join("\n", results);
@@ -583,7 +654,7 @@ public class BatchTool : ToolBase
                         .Where(d => DialogMonitor.IsOpen(d.Hwnd))
                         .ToList();
                     return fresh.Count > 0;
-                }, timeout);
+                }, timeout, watch: true);
                 if (!found) return new StepResult($"No new dialog within {timeout.TotalMilliseconds:0}ms", true);
 
                 RememberDialogs(run, fresh);
@@ -601,7 +672,7 @@ public class BatchTool : ToolBase
                 if (handle == null) return new StepResult("wait until=dialog_closed needs 'handle' (no dialog seen in this batch)", true);
                 var hwnd = _sessionManager.GetHwnd(handle);
                 if (hwnd == 0) return new StepResult($"Unknown window handle {handle}", true);
-                var closed = await PollAsync(() => !DialogMonitor.IsOpen(hwnd), timeout);
+                var closed = await PollAsync(() => !DialogMonitor.IsOpen(hwnd), timeout, watch: true);
                 if (closed && run.LastAction != null)
                 {
                     run.LastAction = run.LastAction with { NewDialogs = Array.Empty<DialogInfo>() };
@@ -615,6 +686,23 @@ public class BatchTool : ToolBase
             case WaitConditions.ElementGone:
             case WaitConditions.TextContains:
                 return await WaitForElementAsync(step, run, timeout);
+
+            case WaitConditions.Idle:
+            {
+                var handle = step.Handle == ElementSelector.LastDialog ? run.LastDialog : step.Handle;
+                // The window named, else the app's foreground window, else the last action's window.
+                nint hwnd = 0;
+                if (handle != null) hwnd = _sessionManager.GetHwnd(handle);
+                else if (ForegroundHandle() is { } foreground) hwnd = _sessionManager.GetHwnd(foreground);
+                else if (run.LastAction is { SourceWindow: not 0 } last) hwnd = last.SourceWindow;
+                if (hwnd == 0) return new StepResult("wait until=idle needs 'handle' (no app window to watch)", true);
+                var stable = step.StableMs is > 0 ? TimeSpan.FromMilliseconds(step.StableMs.Value) : IdleWaiter.DefaultStable;
+                var (idle, state) = await _idle.WaitAsync(hwnd, timeout, stable);
+                var name = _sessionManager.RegisterNativeWindow(hwnd, NativeMethods.GetProcessId(hwnd));
+                return idle
+                    ? new StepResult($"{name} is idle ({state})", false)
+                    : new StepResult($"{name} not idle after {timeout.TotalMilliseconds:0}ms: {state}", true);
+            }
 
             default:
                 return new StepResult($"until must be one of: {string.Join(", ", WaitConditions.All)}", true);
@@ -655,7 +743,7 @@ public class BatchTool : ToolBase
 
         // Poll with exact matching (cheap); on timeout, one forgiving look: a loose name match
         // may satisfy it, and otherwise the error lists the closest names.
-        var met = await PollAsync(() => Check(forgiving: false), timeout)
+        var met = await PollAsync(() => Check(forgiving: false), timeout, watch: true, windowHandle: WatchHandle(step, run))
                   || (step.Until != WaitConditions.ElementGone && step.Selector?.CanForgive == true && Check(forgiving: true));
 
         var what = step.Selector?.Describe() ?? step.Ref;
@@ -692,14 +780,160 @@ public class BatchTool : ToolBase
         }
     }
 
-    private static async Task<bool> PollAsync(Func<bool> condition, TimeSpan timeout)
+    /// <summary>
+    /// Re-checks <paramref name="condition"/> until true or timeout. With watch, a UI Automation
+    /// event (a new window; a change inside <paramref name="windowHandle"/>) triggers the next
+    /// check at once, with polling every 250ms as a fallback.
+    /// </summary>
+    private async Task<bool> PollAsync(Func<bool> condition, TimeSpan timeout, bool watch = false, string? windowHandle = null)
     {
-        var sw = Stopwatch.StartNew();
-        while (true)
+        if (!watch || timeout < TimeSpan.FromMilliseconds(500))
         {
-            if (condition()) return true;
-            if (sw.Elapsed >= timeout) return false;
-            await Task.Delay(PollInterval);
+            return await Poll.UntilAsync(condition, timeout, null, PollInterval);
+        }
+
+        FlaUI.Core.AutomationElements.AutomationElement? window = null;
+        var hwnd = windowHandle != null ? _sessionManager.GetHwnd(windowHandle) : 0;
+        if (hwnd != 0 && !_pending.HasRunningFor(NativeMethods.GetProcessId(hwnd)))
+        {
+            try { window = _sessionManager.GetWindow(windowHandle!); } catch { }
+        }
+        using var watcher = UiaChangeWatcher.Start(_sessionManager.Automation, window);
+        return await Poll.UntilAsync(condition, timeout, watcher.Signal, TimeSpan.FromMilliseconds(250));
+    }
+
+    /// <summary>The window an element wait is about, for event subscriptions.</summary>
+    private string? WatchHandle(BatchStep step, Run run)
+    {
+        if (!string.IsNullOrEmpty(step.Ref)) return ElementRegistry.WindowHandleOf(step.Ref);
+        var handle = step.Selector?.Handle;
+        if (handle == ElementSelector.LastDialog) return run.LastDialog;
+        return handle ?? ForegroundHandle();
+    }
+
+    // ---------- standing dialog answers (onDialog) ----------
+
+    /// <summary>Presses the rule's button on every open dialog a rule matches.</summary>
+    private async Task<List<string>> AnswerDialogsAsync(Run run)
+    {
+        var notes = new List<string>();
+        if (run.Rules.Count == 0) return notes;
+
+        for (var round = 0; round < 3; round++) // an answer can open the next dialog
+        {
+            var open = _dialogs.GetDialogs(_sessionManager.TrackedProcessIds)
+                .Where(d => d.IsBlocking && d.IsEnabled && !run.OpenAtStart.Contains(d.Hwnd) && DialogMonitor.IsOpen(d.Hwnd))
+                .ToList();
+            var answeredAny = false;
+            foreach (var dialog in open)
+            {
+                var controls = NativeDialog.ReadControls(dialog.Hwnd);
+                var text = string.Join("\n", controls.Where(c => c.Kind == NativeControlKind.Text && c.IsVisible).Select(c => c.Text));
+                var rule = DialogRules.Match(run.Rules, dialog.Title, text);
+                if (rule == null) continue;
+
+                var handle = _sessionManager.RegisterNativeWindow(dialog.Hwnd, dialog.ProcessId);
+                var button = NativeDialog.FindButton(controls, rule.Press);
+                string outcome;
+                if (button != null && button.IsEnabled && NativeDialog.Press(button))
+                {
+                    outcome = $"pressed \"{button.Text}\"";
+                }
+                else
+                {
+                    // WPF and other dialogs without child windows: through UI Automation.
+                    var found = _finder.Find(new ElementSelector(Name: rule.Press, Role: "button", Handle: handle), null, out var error, forgiving: true);
+                    if (found == null)
+                    {
+                        notes.Add($"onDialog: {handle} \"{dialog.Title}\" matched ({rule.Describe()}) but has no such button: {error}");
+                        continue;
+                    }
+                    var click = await _clickExecutor.ClickAsync(found.Element, new ClickRequest(found.Ref, ClickMode.Auto,
+                        Options: new ActionRunOptions { SettleTime = TimeSpan.Zero }));
+                    outcome = click.IsError ? $"could not press \"{rule.Press}\": {click.Text}" : $"pressed \"{rule.Press}\"";
+                }
+                NativeDialogTool.WaitUntil(() => !DialogMonitor.IsOpen(dialog.Hwnd), TimeSpan.FromMilliseconds(750));
+                notes.Add($"onDialog: {handle} \"{dialog.Title}\": {outcome}{(DialogMonitor.IsOpen(dialog.Hwnd) ? " (still open)" : "")}");
+                answeredAny = true;
+            }
+            if (!answeredAny) break;
+            await Task.Delay(150);
+        }
+        return notes;
+    }
+
+    // ---------- saving as a flow ----------
+
+    private string SaveFlow(string name, JsonElement arguments, JsonElement actionsElement)
+    {
+        if (_flows == null) return "Saving flows isn't available here.";
+        if (!FlowFormat.IsValidName(name)) return $"Not saved: invalid flow name \"{name}\" (letters, digits, - and _).";
+
+        var warnings = new List<string>();
+        if (System.Text.Json.Nodes.JsonNode.Parse(actionsElement.GetRawText()) is not System.Text.Json.Nodes.JsonArray actions)
+        {
+            return $"Not saved as \"{name}\": actions aren't a list.";
+        }
+        var portable = FlowFormat.ToPortable(actions, DescribeRef, warnings, out var error);
+        if (portable == null) return $"Not saved as \"{name}\": {error}";
+
+        // params: {"file": "Report.txt"} or {"file": {"value": "Report.txt", "description": "..."}}
+        var values = new Dictionary<string, string>();
+        var descriptions = new System.Text.Json.Nodes.JsonObject();
+        if (arguments.TryGetProperty("params", out var p) && p.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var param in p.EnumerateObject())
+            {
+                if (param.Value.ValueKind == JsonValueKind.String)
+                {
+                    values[param.Name] = param.Value.GetString()!;
+                    descriptions[param.Name] = "";
+                }
+                else if (param.Value.ValueKind == JsonValueKind.Object)
+                {
+                    if (param.Value.TryGetProperty("value", out var v) && v.ValueKind == JsonValueKind.String) values[param.Name] = v.GetString()!;
+                    descriptions[param.Name] = param.Value.TryGetProperty("description", out var d) && d.ValueKind == JsonValueKind.String ? d.GetString() : "";
+                }
+            }
+        }
+        portable = FlowFormat.Parameterize(portable, values);
+        foreach (var placeholder in FlowFormat.Placeholders(portable))
+        {
+            if (!descriptions.ContainsKey(placeholder)) descriptions[placeholder] = "";
+        }
+
+        var flow = new System.Text.Json.Nodes.JsonObject
+        {
+            ["description"] = GetStringArgument(arguments, "description") ?? "",
+            ["params"] = descriptions,
+            ["actions"] = portable,
+        };
+        if (arguments.TryGetProperty("onDialog", out var onDialog))
+        {
+            flow["onDialog"] = System.Text.Json.Nodes.JsonNode.Parse(onDialog.GetRawText());
+        }
+
+        var replaced = _flows.Exists(name);
+        _flows.Save(name, flow);
+        var summary = FlowStore.Summarize(name, flow);
+        return $"{(replaced ? "Replaced" : "Saved")} flow {FlowStore.Describe(summary)}; run it with windows_run_flow." +
+               (warnings.Count > 0 ? " Notes: " + string.Join(" ", warnings) : "");
+    }
+
+    private RefInfo? DescribeRef(string refId)
+    {
+        var element = _elementRegistry.GetElement(refId);
+        if (element == null) return null;
+        try
+        {
+            var name = element.Properties.Name.ValueOrDefault;
+            var automationId = element.Properties.AutomationId.ValueOrDefault;
+            var role = Core.Snapshots.SnapshotFormat.Role(element.Properties.ControlType.ValueOrDefault);
+            return new RefInfo(name, automationId, role);
+        }
+        catch
+        {
+            return null;
         }
     }
 

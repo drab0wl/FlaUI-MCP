@@ -233,4 +233,13 @@ public class BatchStepTests
         Assert.Contains("menu", BatchPlan.ClickLike);
         Assert.Contains("check", BatchPlan.ClickLike);
     }
+
+    [Fact]
+    public void Parse_IdleWait()
+    {
+        var step = Step("""{"action":"wait","until":"app_idle","stableMs":800,"handle":"w2"}""");
+        Assert.Equal(WaitConditions.Idle, step.Until);
+        Assert.Equal(800, step.StableMs);
+        Assert.Equal("w2", step.Handle);
+    }
 }
