@@ -88,6 +88,19 @@ public sealed class ElementFinder
             return Register(handle, element);
         }
 
+        // Long lists and trees only create the items near the viewport: ask them for it.
+        if (forgiving && selector.Name != null && selector.Index == 0)
+        {
+            foreach (var (handle, window) in searched)
+            {
+                if (Realize(window, selector) is { } item)
+                {
+                    error = null;
+                    return Register(handle, item);
+                }
+            }
+        }
+
         var closest = new List<string>();
         if (forgiving && selector.CanForgive)
         {
@@ -114,6 +127,47 @@ public sealed class ElementFinder
         string? key = null;
         try { key = SnapshotBuilder.RuntimeIdKey(element.Properties.RuntimeId.ValueOrDefault); } catch { }
         return new FoundElement(element, _elements.RegisterFound(handle, element, key), handle);
+    }
+
+    /// <summary>
+    /// Asks each ItemContainer (virtualized list, tree, grid) in the window for an item with the
+    /// exact name, and realizes it (scrolling it into existence) so it can be acted on.
+    /// </summary>
+    private static AutomationElement? Realize(AutomationElement window, ElementSelector selector)
+    {
+        var sw = Stopwatch.StartNew();
+        try
+        {
+            var automation = window.Automation;
+            var available = new PropertyCondition(automation.PropertyLibrary.PatternAvailability.IsItemContainerPatternAvailable, true);
+            var roleTypes = selector.Role != null ? SnapshotFormat.ControlTypesForRole(selector.Role) : null;
+            foreach (var container in window.FindAll(TreeScope.Subtree, available).Take(20))
+            {
+                if (!container.Patterns.ItemContainer.TryGetPattern(out var items)) continue;
+                AutomationElement? item = null;
+                try { item = items.FindItemByProperty(null!, automation.PropertyLibrary.Element.Name, selector.Name!); } catch { }
+                if (item == null) continue;
+                if (roleTypes != null && !roleTypes.Contains(Try(() => item.Properties.ControlType.ValueOrDefault))) continue;
+                try
+                {
+                    if (item.Patterns.VirtualizedItem.TryGetPattern(out var virtualized)) virtualized.Realize();
+                }
+                catch
+                {
+                    // Already realized, or the provider refuses: it's still usable for patterns.
+                }
+                return item;
+            }
+        }
+        catch
+        {
+            // Not supported here.
+        }
+        finally
+        {
+            TimingLog.Shared.Detail("find-realize", sw.Elapsed, selector.Describe());
+        }
+        return null;
     }
 
     private static string Closest(IReadOnlyList<string> suggestions) =>
@@ -244,6 +298,23 @@ public sealed class ElementFinder
         {
             error = null;
             return found;
+        }
+
+        // Not loaded yet? Long lists and trees can find an item by name and load it.
+        if (selector.Name != null)
+        {
+            foreach (var handle in searched)
+            {
+                var window = _sessions.GetWindow(handle);
+                if (window == null || Realize(window, selector) is not { } item) continue;
+                var node = SnapshotBuilder.ReadLive(item);
+                var refId = _elements.RegisterFound(handle, item, node.RuntimeId);
+                var line = SnapshotFormat.Line(refId, SnapshotFormat.DisplayName(node.Name, node.AutomationId),
+                    SnapshotFormat.Role(node.ControlType), SnapshotFormat.States(node));
+                found.Add(new FoundLine(refId, handle, line, new[] { "a list that loaded it on request" }));
+                error = null;
+                return found;
+            }
         }
 
         // Nothing exact: loose name matches count; otherwise say what's close.

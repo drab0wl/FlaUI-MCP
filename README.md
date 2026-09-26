@@ -139,6 +139,7 @@ Or using `dotnet run`:
 | `windows_set` | Make an element checked / expanded / selected, pick an option, or set a value; does nothing if it already is |
 | `windows_menu` | Choose a menu command by path (`File > Save As...`), including context menus |
 | `windows_read_table` | Read a grid, list view or table as tab-separated rows with a ref per row |
+| `windows_run_flow` | Run a saved flow (a batch saved with `saveAs`), or list the saved ones |
 
 `windows_screenshot` supports an optional `background: true` argument when a
 window `handle` is provided. This uses native background capture when available
@@ -230,7 +231,7 @@ selector: `name`, `nameContains`, `automationId`, `role` (as snapshots print it)
 | `select` | `ref` or selector; `option` to pick an item inside it, or none to select the element itself |
 | `set_value` | `ref` or selector; `value` (number for sliders/spinners, text for text boxes) |
 | `menu` | `path` (`["File", "Save As..."]` or `"File > Save As..."`); optional `handle`, or a `ref` / selector for a context menu; `mode: "input"` to click items with the mouse |
-| `wait` | `ms`, or `until` + `timeoutMs` (default 5000): `dialog_open`, `dialog_closed` (`handle`, default the last dialog), `element` / `element_gone` (selector), `text_contains` (selector + `text`, case-insensitive) |
+| `wait` | `ms`, or `until` + `timeoutMs` (default 5000): `dialog_open`, `dialog_closed` (`handle`, default the last dialog), `element` / `element_gone` (selector), `text_contains` (selector + `text`, case-insensitive), `idle` (`handle`, `stableMs` default 500) |
 | `snapshot` | optional `handle`; `compact` |
 | `dialog_press` | `button` (text, `c3` ref, or `ok`/`cancel`/`yes`/`no`/...); optional `handle` (default the last dialog) |
 | `dialog_set_text` | `text`; optional `control` (`c4`, default the first edit box) and `handle` |
@@ -418,6 +419,35 @@ the number of calls:
 All of these are also `windows_batch` actions: `check`, `uncheck`, `expand`, `collapse`,
 `select` (`option`), `set_value` (`value`) and `menu` (`path`). Like `click`, a dialog they open
 stops the batch unless the next action is `wait until=dialog_open`.
+
+**Waiting, prompts and repeats.**
+
+- **Waits react to the app.** `until` waits subscribe to UI Automation events (windows opening
+  and closing, changes inside the window), so they finish the moment the condition holds
+  instead of on the next poll; polling every 250 ms remains as a fallback.
+- **`until: "idle"`** (batch `wait`, and `windows_wait`) waits until the app answers messages
+  promptly, no progress bar is part-way, and the UI hasn't changed for `stableMs` (500 ms by
+  default). Use it after "Build", "Open", "Search" when there's no particular text to wait for.
+- **`onDialog`** gives a batch standing answers for prompts that may appear:
+  `"onDialog": [{"titleContains": "Save changes", "press": "no"}]` (`title`, `titleContains`
+  and/or `textContains`, plus `press`). A matching dialog is answered and the batch carries on;
+  any other dialog still stops it.
+- **Long lists and trees** only create the items near the viewport. When a name isn't found,
+  selectors and `windows_find` ask the list for the item and load it (UI Automation's
+  ItemContainer / VirtualizedItem), so items far down a list can be found and acted on.
+- **`windows_screenshot annotate=true`** draws the refs of buttons, fields and items onto the
+  image and lists them, for apps whose accessibility tree is too thin to work from text alone.
+- **Saved flows.** Add `saveAs` to a batch that worked and it's kept as a flow in
+  `%APPDATA%\flaui-mcp\flows\<name>.json`: refs become selectors, window handles are dropped,
+  and values listed in `params` become arguments. `windows_run_flow` runs one (`args` fills the
+  parameters) or lists them; the files are plain JSON you can read, edit and keep in git.
+
+  ```json
+  { "saveAs": "open-recent", "description": "Open a recent file", "params": { "file": "Report.txt" },
+    "actions": [ { "action": "menu", "path": "File > Recent > Report.txt" } ] }
+
+  { "name": "open-recent", "args": { "file": "Notes.md" } }
+  ```
 
 **Faster snapshots.** Snapshots read each element's properties (name, automation id, control
 type, enabled/offscreen, pattern availability and toggle/selection/expand/read-only state)

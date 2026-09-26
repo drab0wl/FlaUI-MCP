@@ -14,6 +14,7 @@ internal static class NativeMethods
     public const uint GA_ROOT = 2;
     public const int GWL_STYLE = -16;
 
+    public const uint WM_NULL = 0x0000;
     public const uint WM_CLOSE = 0x0010;
     public const uint WM_SETTEXT = 0x000C;
     public const uint WM_GETTEXT = 0x000D;

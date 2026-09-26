@@ -100,8 +100,9 @@ public static class WaitConditions
     public const string Element = "element";
     public const string ElementGone = "element_gone";
     public const string TextContains = "text_contains";
+    public const string Idle = "idle";
 
-    public static readonly string[] All = { DialogOpen, DialogClosed, Element, ElementGone, TextContains };
+    public static readonly string[] All = { DialogOpen, DialogClosed, Element, ElementGone, TextContains, Idle };
 
     public static string? Normalize(string? until) => until?.Trim().ToLowerInvariant() switch
     {
@@ -111,6 +112,7 @@ public static class WaitConditions
         "element" or "element_appears" or "appears" => Element,
         "element_gone" or "element_disappears" or "gone" => ElementGone,
         "text_contains" or "element_text_contains" => TextContains,
+        "idle" or "app_idle" => Idle,
         _ => "?" + until,
     };
 }
@@ -133,6 +135,9 @@ public sealed record BatchStep
     public string? Control { get; init; }
     public bool NoDialog { get; init; }
     public int? SettleMs { get; init; }
+
+    /// <summary>For wait until=idle: how long the UI must stay unchanged (default 500ms).</summary>
+    public int? StableMs { get; init; }
 
     /// <summary>For "keys": chords to press in order, from "keys" (array or string) or "chord".</summary>
     public IReadOnlyList<string>? Keys { get; init; }
@@ -167,6 +172,7 @@ public sealed record BatchStep
             Control = Str(step, "control"),
             NoDialog = step.TryGetProperty("noDialog", out var nd) && nd.ValueKind == JsonValueKind.True,
             SettleMs = Int(step, "settleMs"),
+            StableMs = Int(step, "stableMs"),
             Keys = KeyList(step),
             Option = Str(step, "option"),
             Path = MenuPath.Parse(step),

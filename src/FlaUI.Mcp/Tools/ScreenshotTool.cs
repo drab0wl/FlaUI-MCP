@@ -1,4 +1,5 @@
 using System.Text.Json;
+using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Capturing;
 using PlaywrightWindows.Mcp.Core;
 using PlaywrightWindows.Mcp.Core.Win32;
@@ -12,11 +13,13 @@ public class ScreenshotTool : ToolBase
 {
     private readonly SessionManager _sessionManager;
     private readonly ElementRegistry _elementRegistry;
+    private readonly ScreenshotAnnotator _annotator;
 
     public ScreenshotTool(SessionManager sessionManager, ElementRegistry elementRegistry)
     {
         _sessionManager = sessionManager;
         _elementRegistry = elementRegistry;
+        _annotator = new ScreenshotAnnotator(elementRegistry);
     }
 
     public override string Name => "windows_screenshot";
@@ -24,7 +27,8 @@ public class ScreenshotTool : ToolBase
     public override string Description =>
         "PNG of a window or element, for when the accessibility tree doesn't show what you need. " +
         "output=file saves it and returns just the path; output=preview also returns a small JPEG; " +
-        "the default returns the full PNG inline.";
+        "the default returns the full PNG inline. annotate=true draws the refs of buttons, fields, items etc. on it " +
+        "(and lists them), so you can act on what you see.";
 
     public override object InputSchema => new
     {
@@ -61,6 +65,11 @@ public class ScreenshotTool : ToolBase
                 type = "boolean",
                 description = "Allow savePath to replace an existing file (default: false)"
             },
+            annotate = new
+            {
+                type = "boolean",
+                description = "Draw the refs of the window's interactive elements on the image and list them (default: false)"
+            },
             output = new
             {
                 type = "string",
@@ -80,6 +89,7 @@ public class ScreenshotTool : ToolBase
         var background = GetBoolArgument(arguments, "background", false);
         var savePath = GetStringArgument(arguments, "savePath");
         var overwrite = GetBoolArgument(arguments, "overwrite", false);
+        var annotate = GetBoolArgument(arguments, "annotate", false);
         var outputText = GetStringArgument(arguments, "output");
         var output = ScreenshotOutputs.Default;
         if (outputText != null)
@@ -98,7 +108,11 @@ public class ScreenshotTool : ToolBase
 
         try
         {
-            CaptureImage capture;
+            CaptureImage? capture = null;
+            byte[]? imageData = null;
+            // For annotate: the screen area the image covers, and the window its elements belong to.
+            System.Drawing.Rectangle? area = null;
+            string? areaWindow = null;
 
             if (background && (fullScreen || !string.IsNullOrEmpty(refId) || string.IsNullOrEmpty(handle)))
             {
@@ -107,6 +121,7 @@ public class ScreenshotTool : ToolBase
 
             if (fullScreen)
             {
+                if (annotate) return Task.FromResult(ErrorResult("annotate needs a window: pass handle or ref, not fullScreen."));
                 capture = Capture.Screen();
             }
             else if (!string.IsNullOrEmpty(refId))
@@ -117,6 +132,8 @@ public class ScreenshotTool : ToolBase
                     return Task.FromResult(ErrorResult($"Element not found: {refId}"));
                 }
                 capture = Capture.Element(element);
+                area = element.BoundingRectangle;
+                areaWindow = ElementRegistry.WindowHandleOf(refId);
             }
             else if (!string.IsNullOrEmpty(handle) && !background
                      && TryGetNativeBounds(_sessionManager.GetHwnd(handle), out var bounds))
@@ -124,6 +141,8 @@ public class ScreenshotTool : ToolBase
                 // Screen-rectangle capture from the HWND: no UI Automation involved, so this
                 // still works when a dialog has the app's UIA provider blocked.
                 capture = Capture.Rectangle(bounds);
+                area = bounds;
+                areaWindow = handle;
             }
             else if (!string.IsNullOrEmpty(handle))
             {
@@ -133,12 +152,17 @@ public class ScreenshotTool : ToolBase
                     return Task.FromResult(ErrorResult($"Window not found: {handle}"));
                 }
 
+                areaWindow = handle;
                 if (background && NativeWindowCapture.TryCaptureWindow(window, out var backgroundImage, out _))
                 {
-                    return Task.FromResult(BuildScreenshotResult(backgroundImage, normalizedSavePath, overwrite, output, handle));
+                    imageData = backgroundImage;
+                    if (TryGetNativeBounds(_sessionManager.GetHwnd(handle), out var backgroundBounds)) area = backgroundBounds;
                 }
-
-                capture = Capture.Element(window);
+                else
+                {
+                    capture = Capture.Element(window);
+                    area = window.BoundingRectangle;
+                }
             }
             else
             {
@@ -162,17 +186,38 @@ public class ScreenshotTool : ToolBase
                 }
 
                 capture = Capture.Element(current);
+                area = current.BoundingRectangle;
+                if (annotate) areaWindow = _sessionManager.RegisterWindow(current.AsWindow());
             }
 
-            byte[] imageData;
-            using (capture)
+            if (capture != null)
             {
-                using var stream = new MemoryStream();
-                capture.Bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
-                imageData = stream.ToArray();
+                using (capture)
+                {
+                    using var stream = new MemoryStream();
+                    capture.Bitmap.Save(stream, System.Drawing.Imaging.ImageFormat.Png);
+                    imageData = stream.ToArray();
+                }
             }
 
-            return Task.FromResult(BuildScreenshotResult(imageData, normalizedSavePath, overwrite, output, refId ?? handle));
+            string? note = null;
+            if (annotate && area is { } covered && areaWindow != null && _sessionManager.GetWindow(areaWindow) is { } annotated)
+            {
+                var drawn = _annotator.Annotate(imageData!, annotated, areaWindow, covered);
+                if (drawn is { } d)
+                {
+                    imageData = d.Png;
+                    note = d.Legend.Count == 0
+                        ? "No interactive elements found to label."
+                        : "Refs on the image:\n" + string.Join("\n", d.Legend);
+                }
+                else
+                {
+                    note = "Refs not drawn: the app's UI Automation isn't answering (probably a pending click behind a dialog).";
+                }
+            }
+
+            return Task.FromResult(BuildScreenshotResult(imageData!, normalizedSavePath, overwrite, output, refId ?? handle, note));
         }
         catch (Exception ex)
         {
@@ -241,7 +286,18 @@ public class ScreenshotTool : ToolBase
         return bounds.Width > 0 && bounds.Height > 0;
     }
 
-    private static McpToolResult BuildScreenshotResult(byte[] imageData, string? savePath, bool overwrite, ScreenshotOutput output, string? label)
+    private static McpToolResult BuildScreenshotResult(byte[] imageData, string? savePath, bool overwrite, ScreenshotOutput output, string? label, string? note = null)
+    {
+        var result = BuildScreenshotResultCore(imageData, savePath, overwrite, output, label);
+        if (note == null || result.IsError == true) return result;
+        var content = result.Content.ToList();
+        var text = content.FindIndex(c => c.Type == "text");
+        if (text >= 0) content[text] = content[text] with { Text = $"{content[text].Text}\n{note}" };
+        else content.Insert(0, new McpContent { Type = "text", Text = note });
+        return result with { Content = content };
+    }
+
+    private static McpToolResult BuildScreenshotResultCore(byte[] imageData, string? savePath, bool overwrite, ScreenshotOutput output, string? label)
     {
         if (output == ScreenshotOutput.Image && string.IsNullOrEmpty(savePath))
         {
